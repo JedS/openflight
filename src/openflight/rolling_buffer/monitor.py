@@ -474,6 +474,10 @@ class RollingBufferMonitor:
                             q_samples=capture.q_samples,
                             ball_speed_mph=shot.ball_speed_mph,
                             club_speed_mph=shot.club_speed_mph,
+                            ball_timestamp_ms=processed.ball_timestamp_ms,
+                            club_timestamp_ms=processed.club_timestamp_ms,
+                            trigger_latency_ms=trigger_latency_ms,
+                            smash_factor=processed.smash_factor,
                         )
 
                         # Log accepted trigger event
@@ -486,11 +490,19 @@ class RollingBufferMonitor:
                         )
 
                         # Log detailed trigger diagnostic
+                        all_outbound = [r for r in processed.timeline.readings if r.is_outbound]
+                        all_inbound = [r for r in processed.timeline.readings if not r.is_outbound]
                         session_logger.log_trigger_diagnostic(
                             trigger_type=self.trigger_type,
                             accepted=True,
                             reason="accepted",
                             total_readings=len(processed.timeline.readings),
+                            outbound_readings=len(all_outbound),
+                            inbound_readings=len(all_inbound),
+                            peak_outbound_mph=max((r.speed_mph for r in all_outbound), default=0),
+                            peak_inbound_mph=max((r.speed_mph for r in all_inbound), default=0),
+                            all_outbound_speeds=[r.speed_mph for r in all_outbound],
+                            all_inbound_speeds=[r.speed_mph for r in all_inbound],
                             latency_ms=trigger_latency_ms,
                             ball_speed_mph=shot.ball_speed_mph,
                             club_speed_mph=shot.club_speed_mph,

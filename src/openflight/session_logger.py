@@ -526,6 +526,10 @@ class SessionLogger:
         q_samples: List[int],
         ball_speed_mph: Optional[float] = None,
         club_speed_mph: Optional[float] = None,
+        ball_timestamp_ms: Optional[float] = None,
+        club_timestamp_ms: Optional[float] = None,
+        trigger_latency_ms: Optional[float] = None,
+        smash_factor: Optional[float] = None,
     ):
         """
         Log raw rolling buffer capture data for offline analysis.
@@ -538,6 +542,10 @@ class SessionLogger:
             q_samples: Raw Q channel samples (4096 values)
             ball_speed_mph: Detected ball speed (if any)
             club_speed_mph: Detected club speed (if any)
+            ball_timestamp_ms: Ball signal position in buffer (ms from start)
+            club_timestamp_ms: Club signal position in buffer (ms from start)
+            trigger_latency_ms: Edge-to-S! latency (ms)
+            smash_factor: Ball speed / club speed ratio
         """
         if not self.enabled:
             return
@@ -552,6 +560,10 @@ class SessionLogger:
             "q_samples": q_samples,
             "ball_speed_mph": ball_speed_mph,
             "club_speed_mph": club_speed_mph,
+            "ball_timestamp_ms": ball_timestamp_ms,
+            "club_timestamp_ms": club_timestamp_ms,
+            "trigger_latency_ms": trigger_latency_ms,
+            "smash_factor": smash_factor,
         })
 
     def log_error(self, error: str, context: Optional[Dict] = None):
