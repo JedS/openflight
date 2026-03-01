@@ -1100,21 +1100,7 @@ def main():
         trigger_kwargs["pre_trigger_segments"] = args.sound_pre_trigger
         trigger_kwargs["pulse_width_us"] = args.pulse_width
 
-    start_monitor(
-        port=args.port,
-        mock=args.mock,
-        mode=args.mode,
-        trigger_type=args.trigger,
-        debug=args.debug,
-        trigger_kwargs=trigger_kwargs,
-        sample_rate_ksps=args.sample_rate,
-    )
-
-    if args.mock:
-        print("Running in MOCK mode - no radar required")
-        print("Simulate shots via WebSocket or API")
-
-    # Initialize camera (auto-enabled unless --no-camera)
+    # Initialize camera BEFORE starting monitor (so session log is accurate)
     if not args.no_camera:
         # Determine if we should use Hough (default) or YOLO
         use_hough = args.camera_model is None and args.roboflow_model is None
@@ -1136,6 +1122,20 @@ def main():
             print("Camera not available - running without camera")
     else:
         print("Camera disabled by --no-camera flag")
+
+    start_monitor(
+        port=args.port,
+        mock=args.mock,
+        mode=args.mode,
+        trigger_type=args.trigger,
+        debug=args.debug,
+        trigger_kwargs=trigger_kwargs,
+        sample_rate_ksps=args.sample_rate,
+    )
+
+    if args.mock:
+        print("Running in MOCK mode - no radar required")
+        print("Simulate shots via WebSocket or API")
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()

@@ -591,19 +591,24 @@ class RollingBufferMonitor:
             return None
 
         # Calculate carry distance
-        if processed.has_spin and processed.spin:
+        # Use spin-adjusted carry only for reliable spin readings
+        has_reliable_spin = processed.has_spin and processed.spin
+        has_any_spin = processed.spin is not None and processed.spin.spin_rpm > 0
+
+        if has_reliable_spin:
             carry = estimate_carry_with_spin(
                 processed.ball_speed_mph,
                 processed.spin.spin_rpm,
                 self._current_club,
-                club_speed_mph=processed.club_speed_mph,  # Include for smash factor validation
+                club_speed_mph=processed.club_speed_mph,
             )
-            spin_rpm = processed.spin.spin_rpm
-            spin_confidence = processed.spin.confidence
         else:
             carry = estimate_carry_distance(processed.ball_speed_mph, self._current_club)
-            spin_rpm = None
-            spin_confidence = None
+
+        # Always pass spin data through if detected (even low quality)
+        # The UI shows confidence indicators so the user can judge
+        spin_rpm = processed.spin.spin_rpm if has_any_spin else None
+        spin_confidence = processed.spin.confidence if has_any_spin else None
 
         # Create shot with extended fields
         shot = Shot(
@@ -615,7 +620,7 @@ class RollingBufferMonitor:
             club=self._current_club,
             spin_rpm=spin_rpm,
             spin_confidence=spin_confidence,
-            carry_spin_adjusted=carry if spin_rpm else None,
+            carry_spin_adjusted=carry if has_reliable_spin else None,
         )
 
         return shot
