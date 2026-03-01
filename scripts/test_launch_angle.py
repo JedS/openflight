@@ -172,7 +172,15 @@ def main():
     parser.add_argument("--timeout", type=float, default=60.0,
                         help="Seconds to wait per shot (default: 60)")
     parser.add_argument("--hough-param2", type=int, default=27,
-                        help="Hough circle threshold — lower = more sensitive (default: 27)")
+                        help="Hough accumulator threshold — lower = more sensitive (default: 27)")
+    parser.add_argument("--hough-param1", type=int, default=50,
+                        help="Canny edge threshold — lower = detects weaker edges (default: 50)")
+    parser.add_argument("--hough-min-radius", type=int, default=5,
+                        help="Min ball radius in pixels (default: 5)")
+    parser.add_argument("--hough-max-radius", type=int, default=50,
+                        help="Max ball radius in pixels (default: 50)")
+    parser.add_argument("--hough-min-dist", type=int, default=50,
+                        help="Min distance between detected circles (default: 50)")
     parser.add_argument("--resolution", type=str, default="640x480",
                         help="Camera resolution WIDTHxHEIGHT (default: 640x480)")
     parser.add_argument("--framerate", type=int, default=60,
@@ -194,9 +202,14 @@ def main():
     tracker = CameraTracker(
         use_hough=True,
         hough_param2=args.hough_param2,
+        hough_param1=args.hough_param1,
+        hough_min_radius=args.hough_min_radius,
+        hough_max_radius=args.hough_max_radius,
+        hough_min_dist=args.hough_min_dist,
         frame_width=width,
     )
-    print(f"  Detector: Hough circles (param2={args.hough_param2})")
+    print(f"  Detector: Hough circles (param1={args.hough_param1}, param2={args.hough_param2}, "
+          f"radius={args.hough_min_radius}-{args.hough_max_radius}, minDist={args.hough_min_dist})")
     print(f"  Resolution: {width}x{height} @ {args.framerate}fps")
 
     if args.mock:
