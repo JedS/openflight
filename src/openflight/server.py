@@ -112,7 +112,11 @@ def init_camera(
     roboflow_api_key: str = None,
     imgsz: int = 256,
     use_hough: bool = True,  # Default to Hough detection
-    hough_param2: int = 27,  # Tuned sensitivity
+    hough_param2: int = 33,
+    hough_param1: int = 48,
+    hough_min_radius: int = 4,
+    hough_max_radius: int = 43,
+    hough_min_dist: int = 266,
 ):
     """Initialize camera and ball tracker (Hough, YOLO, or Roboflow)."""
     global camera, camera_tracker, camera_enabled  # pylint: disable=global-statement
@@ -155,6 +159,10 @@ def init_camera(
             camera_tracker = CameraTracker(
                 use_hough=True,
                 hough_param2=hough_param2,
+                hough_param1=hough_param1,
+                hough_min_radius=hough_min_radius,
+                hough_max_radius=hough_max_radius,
+                hough_min_dist=hough_min_dist,
             )
 
         # Auto-enable camera when initialized
@@ -606,7 +614,7 @@ def on_shot_detected(shot: Shot):
     """Callback when a shot is detected - emit to all clients."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
 
-    print(f"[DEBUG] Shot callback triggered: {shot.ball_speed_mph:.1f} mph")
+    logger.debug("Shot callback triggered: %.1f mph", shot.ball_speed_mph)
 
     # Try to get launch angle from camera BEFORE emitting shot
     camera_data = None
@@ -626,27 +634,40 @@ def on_shot_detected(shot: Shot):
                     "positions_tracked": len(launch_angle.positions),
                     "launch_detected": camera_tracker.launch_detected,
                 }
-                print(f"[CAMERA] Launch angle: {launch_angle.vertical:.1f}° V, {launch_angle.horizontal:.1f}° H (conf: {launch_angle.confidence:.0%})")
-
-                # Log camera data to session logger
-                session_logger = get_session_logger()
-                if session_logger:
-                    session_logger.log_camera_data(
-                        shot_number=session_logger.stats.get("shots_detected", 0),
-                        launch_angle_vertical=launch_angle.vertical,
-                        launch_angle_horizontal=launch_angle.horizontal,
-                        confidence=launch_angle.confidence,
-                        positions_tracked=len(launch_angle.positions),
-                        launch_detected=camera_tracker.launch_detected
-                    )
+                logger.info("Launch angle: %.1f° V, %.1f° H (conf: %.0f%%)", launch_angle.vertical, launch_angle.horizontal, launch_angle.confidence * 100)
 
             # Reset camera tracker for next shot
             camera_tracker.reset()
             ball_detected = False
             ball_detection_confidence = 0.0
     except Exception as e:
-        print(f"[WARN] Camera processing error: {e}")
+        logger.warning("Camera processing error: %s", e)
         camera_data = None
+
+    # Log shot with all data (radar + spin + camera) in one entry
+    try:
+        session_log = get_session_logger()
+        if session_log:
+            session_log.log_shot(
+                ball_speed_mph=shot.ball_speed_mph,
+                club_speed_mph=shot.club_speed_mph,
+                smash_factor=shot.smash_factor,
+                estimated_carry_yards=shot.estimated_carry_yards,
+                club=shot.club.value,
+                peak_magnitude=getattr(shot, '_peak_magnitude', None),
+                readings_count=getattr(shot, '_readings_count', 0),
+                readings=getattr(shot, '_readings_data', None),
+                spin_rpm=shot.spin_rpm,
+                spin_confidence=shot.spin_confidence,
+                spin_quality=shot.spin_quality,
+                carry_spin_adjusted=shot.carry_spin_adjusted,
+                mode=getattr(shot, '_mode', 'streaming'),
+                launch_angle_vertical=shot.launch_angle_vertical,
+                launch_angle_horizontal=shot.launch_angle_horizontal,
+                launch_angle_confidence=shot.launch_angle_confidence,
+            )
+    except Exception as e:
+        logger.warning("Failed to log shot: %s", e)
 
     # Emit shot with launch angle data included
     try:
@@ -658,9 +679,9 @@ def on_shot_detected(shot: Shot):
         angle_str = ""
         if shot.launch_angle_vertical is not None:
             angle_str = f", Launch: {shot.launch_angle_vertical:.1f}°"
-        print(f"[SHOT] Ball speed: {shot.ball_speed_mph:.1f} mph, Carry: {shot.estimated_carry_yards:.0f} yds{angle_str}")
+        logger.info("Shot: ball=%.1f mph, carry=%.0f yds%s", shot.ball_speed_mph, shot.estimated_carry_yards, angle_str)
     except Exception as e:
-        print(f"[ERROR] Failed to emit shot: {e}")
+        logger.error("Failed to emit shot: %s", e)
         return
 
     # Debug logging (optional)
@@ -738,7 +759,7 @@ def start_monitor(
             radar_port=port,
             firmware_version=radar_info.get("Version"),
             camera_enabled=camera is not None,
-            camera_model=camera_tracker.model_path if camera_tracker else None,
+            camera_model="hough" if (camera_tracker and camera_tracker.use_hough) else None,
             config=radar_config.copy(),
             mode=mode,
             trigger_type=trigger_type if mode == "rolling-buffer" else None
@@ -928,8 +949,24 @@ def main():
         help="YOLO inference input size (256 for speed, 640 for accuracy)"
     )
     parser.add_argument(
-        "--hough-param2", type=int, default=27,
-        help="Hough circle detection sensitivity (lower = more sensitive, default 27)"
+        "--hough-param2", type=int, default=33,
+        help="Hough accumulator threshold (lower = more sensitive, default 33)"
+    )
+    parser.add_argument(
+        "--hough-param1", type=int, default=48,
+        help="Canny edge threshold (lower = detects weaker edges, default 48)"
+    )
+    parser.add_argument(
+        "--hough-min-radius", type=int, default=4,
+        help="Min ball radius in pixels (default 4)"
+    )
+    parser.add_argument(
+        "--hough-max-radius", type=int, default=43,
+        help="Max ball radius in pixels (default 43)"
+    )
+    parser.add_argument(
+        "--hough-min-dist", type=int, default=266,
+        help="Min distance between detected circles in pixels (default 266)"
     )
     parser.add_argument(
         "--roboflow-model",
@@ -1063,6 +1100,29 @@ def main():
         trigger_kwargs["pre_trigger_segments"] = args.sound_pre_trigger
         trigger_kwargs["pulse_width_us"] = args.pulse_width
 
+    # Initialize camera BEFORE starting monitor (so session log is accurate)
+    if not args.no_camera:
+        # Determine if we should use Hough (default) or YOLO
+        use_hough = args.camera_model is None and args.roboflow_model is None
+
+        if init_camera(
+            model_path=args.camera_model,
+            roboflow_model_id=args.roboflow_model,
+            roboflow_api_key=args.roboflow_api_key,
+            imgsz=args.camera_imgsz,
+            use_hough=use_hough,
+            hough_param2=args.hough_param2,
+            hough_param1=args.hough_param1,
+            hough_min_radius=args.hough_min_radius,
+            hough_max_radius=args.hough_max_radius,
+            hough_min_dist=args.hough_min_dist,
+        ):
+            start_camera_thread()
+        else:
+            print("Camera not available - running without camera")
+    else:
+        print("Camera disabled by --no-camera flag")
+
     start_monitor(
         port=args.port,
         mock=args.mock,
@@ -1076,25 +1136,6 @@ def main():
     if args.mock:
         print("Running in MOCK mode - no radar required")
         print("Simulate shots via WebSocket or API")
-
-    # Initialize camera (auto-enabled unless --no-camera)
-    if not args.no_camera:
-        # Determine if we should use Hough (default) or YOLO
-        use_hough = args.camera_model is None and args.roboflow_model is None
-
-        if init_camera(
-            model_path=args.camera_model,
-            roboflow_model_id=args.roboflow_model,
-            roboflow_api_key=args.roboflow_api_key,
-            imgsz=args.camera_imgsz,
-            use_hough=use_hough,
-            hough_param2=args.hough_param2,
-        ):
-            start_camera_thread()
-        else:
-            print("Camera not available - running without camera")
-    else:
-        print("Camera disabled by --no-camera flag")
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()

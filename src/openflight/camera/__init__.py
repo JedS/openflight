@@ -26,13 +26,17 @@ from .launch_angle import (
     LaunchAngles,
     CameraCalibration,
 )
-from .tracker import (
-    BallTracker,
-    HybridBallTracker,
-    TrackedBall,
-    BallTrajectory,
-    TrackerConfig,
-)
+try:
+    from .tracker import (
+        BallTracker,
+        HybridBallTracker,
+        TrackedBall,
+        BallTrajectory,
+        TrackerConfig,
+    )
+    _TRACKER_AVAILABLE = True
+except ImportError:
+    _TRACKER_AVAILABLE = False
 
 __all__ = [
     # Capture
@@ -45,14 +49,18 @@ __all__ = [
     "BallDetector",
     "DetectedBall",
     "DetectorConfig",
-    # Tracking
-    "BallTracker",
-    "HybridBallTracker",
-    "TrackedBall",
-    "BallTrajectory",
-    "TrackerConfig",
     # Launch angle
     "LaunchAngleCalculator",
     "LaunchAngles",
     "CameraCalibration",
 ]
+
+if _TRACKER_AVAILABLE:
+    __all__ += [
+        # Tracking
+        "BallTracker",
+        "HybridBallTracker",
+        "TrackedBall",
+        "BallTrajectory",
+        "TrackerConfig",
+    ]

@@ -448,27 +448,16 @@ class RollingBufferMonitor:
                         f"{shot.spin_rpm:.0f}" if shot.spin_rpm else "N/A"
                     )
 
-                    # Log to session logger
+                    # Attach metadata for server.py to log with camera data
+                    shot._readings_count = len(processed.timeline.readings)
+                    shot._readings_data = None  # Raw readings not stored in rolling buffer mode
+                    shot._peak_magnitude = None  # Not available in rolling buffer mode
+                    shot._mode = "rolling-buffer"
+
+                    # Log raw I/Q data and trigger events to session logger
                     session_logger = get_session_logger()
                     if session_logger:
                         shot_number = len(self._shots)
-
-                        # Log the shot
-                        session_logger.log_shot(
-                            ball_speed_mph=shot.ball_speed_mph,
-                            club_speed_mph=shot.club_speed_mph,
-                            smash_factor=shot.smash_factor,
-                            estimated_carry_yards=shot.estimated_carry_yards,
-                            club=self._current_club.value,
-                            peak_magnitude=None,  # Not available in rolling buffer mode
-                            readings_count=len(processed.timeline.readings),
-                            readings=None,  # Raw readings not stored in rolling buffer mode
-                            spin_rpm=shot.spin_rpm,
-                            spin_confidence=shot.spin_confidence,
-                            spin_quality=shot.spin_quality,
-                            carry_spin_adjusted=shot.carry_spin_adjusted,
-                            mode="rolling-buffer"
-                        )
 
                         # Log raw I/Q data for offline analysis
                         session_logger.log_rolling_buffer_capture(
@@ -483,6 +472,10 @@ class RollingBufferMonitor:
                             club_timestamp_ms=processed.club_timestamp_ms,
                             trigger_latency_ms=trigger_latency_ms,
                             smash_factor=processed.smash_factor,
+                            spin_rpm=processed.spin.spin_rpm if processed.spin else None,
+                            spin_confidence=processed.spin.confidence if processed.spin else None,
+                            spin_quality=processed.spin.quality if processed.spin else None,
+                            spin_snr=processed.spin.snr if processed.spin else None,
                         )
 
                         # Log accepted trigger event
@@ -598,19 +591,24 @@ class RollingBufferMonitor:
             return None
 
         # Calculate carry distance
-        if processed.has_spin and processed.spin:
+        # Use spin-adjusted carry only for reliable spin readings
+        has_reliable_spin = processed.has_spin and processed.spin
+        has_any_spin = processed.spin is not None and processed.spin.spin_rpm > 0
+
+        if has_reliable_spin:
             carry = estimate_carry_with_spin(
                 processed.ball_speed_mph,
                 processed.spin.spin_rpm,
                 self._current_club,
-                club_speed_mph=processed.club_speed_mph,  # Include for smash factor validation
+                club_speed_mph=processed.club_speed_mph,
             )
-            spin_rpm = processed.spin.spin_rpm
-            spin_confidence = processed.spin.confidence
         else:
             carry = estimate_carry_distance(processed.ball_speed_mph, self._current_club)
-            spin_rpm = None
-            spin_confidence = None
+
+        # Always pass spin data through if detected (even low quality)
+        # The UI shows confidence indicators so the user can judge
+        spin_rpm = processed.spin.spin_rpm if has_any_spin else None
+        spin_confidence = processed.spin.confidence if has_any_spin else None
 
         # Create shot with extended fields
         shot = Shot(
@@ -622,7 +620,7 @@ class RollingBufferMonitor:
             club=self._current_club,
             spin_rpm=spin_rpm,
             spin_confidence=spin_confidence,
-            carry_spin_adjusted=carry if spin_rpm else None,
+            carry_spin_adjusted=carry if has_reliable_spin else None,
         )
 
         return shot
