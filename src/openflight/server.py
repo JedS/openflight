@@ -617,9 +617,11 @@ def on_shot_detected(shot: Shot):
     logger.debug("Shot callback triggered: %.1f mph", shot.ball_speed_mph)
 
     # Try to get launch angle from camera BEFORE emitting shot
+    # Skip camera for mock shots — they already have simulated launch angle
     camera_data = None
+    is_mock = getattr(shot, '_mode', None) == 'mock'
     try:
-        if camera_tracker and camera_enabled:
+        if camera_tracker and camera_enabled and not is_mock:
             launch_angle = camera_tracker.calculate_launch_angle()
             if launch_angle:
                 # Update shot object with launch angle data
