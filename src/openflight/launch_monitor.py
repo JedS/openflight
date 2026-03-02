@@ -123,12 +123,12 @@ def estimate_carry_distance(ball_speed_mph: float, club: ClubType = ClubType.DRI
     }
 
     # Interpolate from driver table
-    if ball_speed_mph <= DRIVER_TABLE[0][0]:
+    if ball_speed_mph <= monotonic_driver_curve[0][0]:
         # Below minimum - extrapolate linearly
         ratio = ball_speed_mph / monotonic_driver_curve[0][0]
         base_carry = monotonic_driver_curve[0][1]
         carry = base_carry * ratio
-    elif ball_speed_mph >= DRIVER_TABLE[-1][0]:
+    elif ball_speed_mph >= monotonic_driver_curve[-1][0]:
         # Above maximum - extrapolate conservatively
         # Use ~1.8 yards per mph above 210 mph
         base_carry = monotonic_driver_curve[-1][1]
