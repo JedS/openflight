@@ -3,6 +3,12 @@
   DIY Golf Launch Monitor using the OPS243-A Doppler Radar.
 </p>
 
+<p align="center">
+  <a href="https://buymeacoffee.com/colemangolfs">
+    <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee" />
+  </a>
+</p>
+
 > [!WARNING]
 > **This project is in active development.** Features may be incomplete, unstable, or change without notice. Expect bugs and breaking changes. Contributions and bug reports are welcome!
 
