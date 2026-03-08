@@ -119,7 +119,7 @@ function AppContent() {
             userSelect: 'none',
           }}
         >
-          {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <Logo size="small" variant="color" />}
+          {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <Logo size="small" variant="light" />}
         </div>
         <div className="header__controls">
           <ClubPicker selectedClub={selectedClub} onClubChange={handleClubChange} />
