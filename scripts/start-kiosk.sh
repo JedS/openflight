@@ -17,6 +17,23 @@ NO_CAMERA=false  # Camera auto-enabled by default (uses Hough + ByteTrack)
 MODE="rolling-buffer"  # Default: rolling buffer mode (requires one-time radar setup)
 TRIGGER="sound"  # Default: hardware sound trigger (SEN-14262 → HOST_INT)
 SOUND_PRE_TRIGGER=""
+BUFFER_SPLIT=""
+
+# Buffer split presets (pre/post trigger segments out of 32 total)
+# At 20ksps: each segment = 6.4ms, total buffer = 204.8ms
+# At 30ksps: each segment = 4.27ms, total buffer = 136.5ms
+#
+#   balanced  = S#16 — 50/50 split (recommended starting point)
+#   post-heavy = S#12 — 37/63 split (more ball flight, less backswing)
+#   pre-heavy  = S#24 — 75/25 split (more backswing, some ball flight)
+resolve_buffer_split() {
+    case "$1" in
+        balanced)   echo 16 ;;
+        post-heavy) echo 12 ;;
+        pre-heavy)  echo 24 ;;
+        *)          echo "$1" ;;  # raw number passthrough
+    esac
+}
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -49,6 +66,10 @@ while [[ $# -gt 0 ]]; do
             SOUND_PRE_TRIGGER="$2"
             shift 2
             ;;
+        --buffer-split)
+            BUFFER_SPLIT="$2"
+            shift 2
+            ;;
         --sample-rate)
             SAMPLE_RATE="$2"
             shift 2
@@ -62,6 +83,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Resolve buffer split preset to a number (overrides --sound-pre-trigger)
+if [ -n "$BUFFER_SPLIT" ]; then
+    SOUND_PRE_TRIGGER=$(resolve_buffer_split "$BUFFER_SPLIT")
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -181,6 +207,9 @@ else
     fi
     if [ -n "$TRIGGER" ]; then
         log "Trigger: $TRIGGER"
+    fi
+    if [ -n "$SOUND_PRE_TRIGGER" ]; then
+        log "Buffer split: S#$SOUND_PRE_TRIGGER ($SOUND_PRE_TRIGGER pre / $((32 - SOUND_PRE_TRIGGER)) post segments)"
     fi
 fi
 

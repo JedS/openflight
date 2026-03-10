@@ -12,7 +12,7 @@ assumes the board was configured with A! and power cycled.
 
 Usage:
     uv run python scripts/capture_iq.py
-    uv run python scripts/capture_iq.py --pre-trigger 32 --sample-rate 20
+    uv run python scripts/capture_iq.py --pre-trigger 32 --sample-rate 30
     uv run python scripts/capture_iq.py -o my_captures.pkl
 
 To analyze afterwards:
@@ -77,7 +77,7 @@ Examples:
     uv run python scripts/capture_iq.py
 
     # With custom pre-trigger and sample rate
-    uv run python scripts/capture_iq.py --pre-trigger 32 --sample-rate 20
+    uv run python scripts/capture_iq.py --pre-trigger 32 --sample-rate 30
 
     # Analyze saved captures
     uv run python src/analysis/analyze_capture.py ~/openflight_sessions/capture_*.pkl
@@ -90,12 +90,12 @@ Examples:
         "--port", help="Serial port for radar (auto-detect if not specified)"
     )
     parser.add_argument(
-        "--pre-trigger", "-p", type=int, default=32,
-        help="Pre-trigger segments S#n, 0-32 (default: 32 = all pre-trigger)"
+        "--pre-trigger", "-p", type=int, default=16,
+        help="Pre-trigger segments S#n, 0-32 (default: 16 = 50/50 split)"
     )
     parser.add_argument(
-        "--sample-rate", "-s", type=int, default=20,
-        help="Sample rate in ksps (default: 20)"
+        "--sample-rate", "-s", type=int, default=30,
+        help="Sample rate in ksps (default: 30)"
     )
     parser.add_argument(
         "--timeout", "-t", type=float, default=60.0,

@@ -1,3 +1,11 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "numpy>=1.20.0",
+#     "matplotlib>=3.5.0",
+# ]
+# ///
+
 import matplotlib
 matplotlib.use('TkAgg')
 

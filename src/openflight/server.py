@@ -1253,8 +1253,8 @@ def main():
     parser.add_argument(
         "--sound-pre-trigger",
         type=int,
-        default=32,
-        help="Pre-trigger segments for sound trigger (default: 32 = ~137ms pre / 0ms post, each ~4.27ms at 30ksps)",
+        default=16,
+        help="Pre-trigger segments S#n, 0-32 (default: 16 = 50/50 split, each segment ~4.27ms at 30ksps)",
     )
     parser.add_argument(
         "--sample-rate",
