@@ -234,6 +234,7 @@ class RollingBufferMonitor:
         self,
         port: Optional[str] = None,
         trigger_type: str = "speed",
+        sample_rate_ksps: int = 30,
         **trigger_kwargs,
     ):
         """
@@ -249,8 +250,9 @@ class RollingBufferMonitor:
             **trigger_kwargs: Arguments for trigger strategy
         """
         self.radar = OPS243Radar(port=port)
-        self.processor = RollingBufferProcessor()
+        self.processor = RollingBufferProcessor(sample_rate=sample_rate_ksps * 1000)
         self.trigger_type = trigger_type
+        self.sample_rate_ksps = sample_rate_ksps
         self.trigger = create_trigger(trigger_type, **trigger_kwargs)
 
         self._running = False
@@ -278,8 +280,11 @@ class RollingBufferMonitor:
         if self.trigger_type != "speed":
             # Get pre_trigger_segments from the trigger if available
             pre_trigger_segments = getattr(self.trigger, 'pre_trigger_segments', 12)
-            self.radar.configure_for_rolling_buffer(pre_trigger_segments=pre_trigger_segments)
-            logger.info("Rolling buffer mode configured with S#%d", pre_trigger_segments)
+            self.radar.configure_for_rolling_buffer(
+                pre_trigger_segments=pre_trigger_segments,
+                sample_rate_ksps=self.sample_rate_ksps,
+            )
+            logger.info("Rolling buffer mode configured with S#%d, S=%d", pre_trigger_segments, self.sample_rate_ksps)
         else:
             logger.info("Using speed trigger - configuration deferred to trigger")
 
@@ -443,27 +448,10 @@ class RollingBufferMonitor:
                         f"{shot.spin_rpm:.0f}" if shot.spin_rpm else "N/A"
                     )
 
-                    # Log to session logger
+                    # Log raw I/Q data and trigger events to session logger
                     session_logger = get_session_logger()
                     if session_logger:
                         shot_number = len(self._shots)
-
-                        # Log the shot
-                        session_logger.log_shot(
-                            ball_speed_mph=shot.ball_speed_mph,
-                            club_speed_mph=shot.club_speed_mph,
-                            smash_factor=shot.smash_factor,
-                            estimated_carry_yards=shot.estimated_carry_yards,
-                            club=self._current_club.value,
-                            peak_magnitude=None,  # Not available in rolling buffer mode
-                            readings_count=len(processed.timeline.readings),
-                            readings=None,  # Raw readings not stored in rolling buffer mode
-                            spin_rpm=shot.spin_rpm,
-                            spin_confidence=shot.spin_confidence,
-                            spin_quality=shot.spin_quality,
-                            carry_spin_adjusted=shot.carry_spin_adjusted,
-                            mode="rolling-buffer"
-                        )
 
                         # Log raw I/Q data for offline analysis
                         session_logger.log_rolling_buffer_capture(
@@ -474,6 +462,14 @@ class RollingBufferMonitor:
                             q_samples=capture.q_samples,
                             ball_speed_mph=shot.ball_speed_mph,
                             club_speed_mph=shot.club_speed_mph,
+                            ball_timestamp_ms=processed.ball_timestamp_ms,
+                            club_timestamp_ms=processed.club_timestamp_ms,
+                            trigger_latency_ms=trigger_latency_ms,
+                            smash_factor=processed.smash_factor,
+                            spin_rpm=processed.spin.spin_rpm if processed.spin else None,
+                            spin_confidence=processed.spin.confidence if processed.spin else None,
+                            spin_quality=processed.spin.quality if processed.spin else None,
+                            spin_snr=processed.spin.snr if processed.spin else None,
                         )
 
                         # Log accepted trigger event
@@ -486,11 +482,19 @@ class RollingBufferMonitor:
                         )
 
                         # Log detailed trigger diagnostic
+                        all_outbound = [r for r in processed.timeline.readings if r.is_outbound]
+                        all_inbound = [r for r in processed.timeline.readings if not r.is_outbound]
                         session_logger.log_trigger_diagnostic(
                             trigger_type=self.trigger_type,
                             accepted=True,
                             reason="accepted",
                             total_readings=len(processed.timeline.readings),
+                            outbound_readings=len(all_outbound),
+                            inbound_readings=len(all_inbound),
+                            peak_outbound_mph=max((r.speed_mph for r in all_outbound), default=0),
+                            peak_inbound_mph=max((r.speed_mph for r in all_inbound), default=0),
+                            all_outbound_speeds=[r.speed_mph for r in all_outbound],
+                            all_inbound_speeds=[r.speed_mph for r in all_inbound],
                             latency_ms=trigger_latency_ms,
                             ball_speed_mph=shot.ball_speed_mph,
                             club_speed_mph=shot.club_speed_mph,
@@ -581,19 +585,24 @@ class RollingBufferMonitor:
             return None
 
         # Calculate carry distance
-        if processed.has_spin and processed.spin:
+        # Use spin-adjusted carry only for reliable spin readings
+        has_reliable_spin = processed.has_spin and processed.spin
+        has_any_spin = processed.spin is not None and processed.spin.spin_rpm > 0
+
+        if has_reliable_spin:
             carry = estimate_carry_with_spin(
                 processed.ball_speed_mph,
                 processed.spin.spin_rpm,
                 self._current_club,
-                club_speed_mph=processed.club_speed_mph,  # Include for smash factor validation
+                club_speed_mph=processed.club_speed_mph,
             )
-            spin_rpm = processed.spin.spin_rpm
-            spin_confidence = processed.spin.confidence
         else:
             carry = estimate_carry_distance(processed.ball_speed_mph, self._current_club)
-            spin_rpm = None
-            spin_confidence = None
+
+        # Always pass spin data through if detected (even low quality)
+        # The UI shows confidence indicators so the user can judge
+        spin_rpm = processed.spin.spin_rpm if has_any_spin else None
+        spin_confidence = processed.spin.confidence if has_any_spin else None
 
         # Create shot with extended fields
         shot = Shot(
@@ -605,7 +614,8 @@ class RollingBufferMonitor:
             club=self._current_club,
             spin_rpm=spin_rpm,
             spin_confidence=spin_confidence,
-            carry_spin_adjusted=carry if spin_rpm else None,
+            carry_spin_adjusted=carry if has_reliable_spin else None,
+            mode="rolling-buffer",
         )
 
         return shot

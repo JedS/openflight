@@ -259,7 +259,10 @@ class SessionLogger:
         spin_confidence: Optional[float] = None,
         spin_quality: Optional[str] = None,
         carry_spin_adjusted: Optional[float] = None,
-        mode: str = "streaming"
+        mode: str = "streaming",
+        launch_angle_vertical: Optional[float] = None,
+        launch_angle_horizontal: Optional[float] = None,
+        launch_angle_confidence: Optional[float] = None,
     ):
         """
         Log a detected shot with all metrics.
@@ -299,6 +302,9 @@ class SessionLogger:
             "spin_quality": spin_quality,
             "carry_spin_adjusted": carry_spin_adjusted,
             "mode": mode,
+            "launch_angle_vertical": launch_angle_vertical,
+            "launch_angle_horizontal": launch_angle_horizontal,
+            "launch_angle_confidence": launch_angle_confidence,
         })
 
     def log_camera_data(
@@ -405,7 +411,7 @@ class SessionLogger:
         nearby players can trip sound triggers.
 
         Args:
-            trigger_type: Type of trigger (e.g., "sound-passthrough", "sound-gpio")
+            trigger_type: Type of trigger (e.g., "sound", "sound-gpio")
             accepted: True if trigger led to valid shot detection
             reason: Reason for rejection (if not accepted)
             peak_speed_mph: Peak speed detected (if any)
@@ -526,6 +532,14 @@ class SessionLogger:
         q_samples: List[int],
         ball_speed_mph: Optional[float] = None,
         club_speed_mph: Optional[float] = None,
+        ball_timestamp_ms: Optional[float] = None,
+        club_timestamp_ms: Optional[float] = None,
+        trigger_latency_ms: Optional[float] = None,
+        smash_factor: Optional[float] = None,
+        spin_rpm: Optional[float] = None,
+        spin_confidence: Optional[float] = None,
+        spin_quality: Optional[str] = None,
+        spin_snr: Optional[float] = None,
     ):
         """
         Log raw rolling buffer capture data for offline analysis.
@@ -538,6 +552,14 @@ class SessionLogger:
             q_samples: Raw Q channel samples (4096 values)
             ball_speed_mph: Detected ball speed (if any)
             club_speed_mph: Detected club speed (if any)
+            ball_timestamp_ms: Ball signal position in buffer (ms from start)
+            club_timestamp_ms: Club signal position in buffer (ms from start)
+            trigger_latency_ms: Edge-to-S! latency (ms)
+            smash_factor: Ball speed / club speed ratio
+            spin_rpm: Detected spin rate in RPM
+            spin_confidence: Confidence of spin detection (0-1)
+            spin_quality: Quality assessment ("high", "medium", "low")
+            spin_snr: Signal-to-noise ratio of spin detection
         """
         if not self.enabled:
             return
@@ -552,6 +574,14 @@ class SessionLogger:
             "q_samples": q_samples,
             "ball_speed_mph": ball_speed_mph,
             "club_speed_mph": club_speed_mph,
+            "ball_timestamp_ms": ball_timestamp_ms,
+            "club_timestamp_ms": club_timestamp_ms,
+            "trigger_latency_ms": trigger_latency_ms,
+            "smash_factor": smash_factor,
+            "spin_rpm": spin_rpm,
+            "spin_confidence": spin_confidence,
+            "spin_quality": spin_quality,
+            "spin_snr": spin_snr,
         })
 
     def log_error(self, error: str, context: Optional[Dict] = None):

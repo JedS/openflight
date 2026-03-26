@@ -44,6 +44,9 @@ Thumbs.db
 # Project specific
 shots/
 logs/
+credentials.env
+*.env
+!*.env.example
 
 # Test artifacts
 test_camera.jpg

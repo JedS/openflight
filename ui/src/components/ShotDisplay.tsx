@@ -4,7 +4,7 @@ import './ShotDisplay.css';
 
 interface ShotDisplayProps {
   shot: Shot | null;
-  isLatest?: boolean;
+  animate?: boolean;
 }
 
 // Speed gauge configuration
@@ -44,13 +44,7 @@ function SpeedGauge({ speed, label }: { speed: number; label: string }) {
     <div className="speed-gauge">
       <svg viewBox="0 0 200 140" className="speed-gauge__svg">
         {/* Background arc */}
-        <path
-          d={backgroundArc}
-          fill="none"
-          stroke="rgba(245, 240, 230, 0.1)"
-          strokeWidth="12"
-          strokeLinecap="round"
-        />
+        <path d={backgroundArc} fill="none" stroke="rgba(245, 240, 230, 0.1)" strokeWidth="12" strokeLinecap="round" />
         {/* Value arc */}
         <path
           d={valueArc}
@@ -125,7 +119,7 @@ function getLaunchAngleQuality(confidence: number | null): 'high' | 'medium' | '
   return 'low';
 }
 
-export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
+export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
   const carryRange = useMemo(() => {
     if (!shot) return null;
     return `${shot.carry_range[0]}–${shot.carry_range[1]} yds`;
@@ -157,7 +151,7 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
   const hasLaunchAngle = shot.launch_angle_vertical !== null;
 
   return (
-    <div className={`shot-display ${isLatest ? 'shot-display--latest' : ''}`}>
+    <div className={`shot-display ${animate ? 'shot-display--animate' : ''}`}>
       <div className="shot-display__layout">
         {/* Left: Ball Speed Gauge */}
         <div className="shot-display__primary">
@@ -173,35 +167,31 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
             subtext={carrySubtext}
             variant="primary"
           />
-          {hasLaunchAngle ? (
-            <MetricCard
-              value={shot.launch_angle_vertical!.toFixed(1)}
-              unit="°"
-              label="Launch Angle"
-              subtext={shot.launch_angle_horizontal !== null ? `${shot.launch_angle_horizontal > 0 ? '+' : ''}${shot.launch_angle_horizontal.toFixed(1)}° H` : undefined}
-              variant="secondary"
-              confidence={getLaunchAngleQuality(shot.launch_angle_confidence)}
-            />
-          ) : hasSpin ? (
-            <MetricCard
-              value={formatSpinRpm(shot.spin_rpm!)}
-              unit="rpm"
-              label="Spin Rate"
-              variant="spin"
-              confidence={shot.spin_quality}
-            />
-          ) : (
-            <MetricCard
-              value={shot.club_speed_mph ? shot.club_speed_mph.toFixed(1) : '—'}
-              unit={shot.club_speed_mph ? 'mph' : undefined}
-              label="Club Speed"
-              variant="secondary"
-            />
-          )}
           <MetricCard
-            value={shot.smash_factor ? shot.smash_factor.toFixed(2) : '—'}
-            label="Smash Factor"
+            value={shot.club_speed_mph ? shot.club_speed_mph.toFixed(1) : '—'}
+            unit={shot.club_speed_mph ? 'mph' : undefined}
+            label="Club Speed"
+            subtext={shot.smash_factor ? `${shot.smash_factor.toFixed(2)} smash` : undefined}
             variant="secondary"
+          />
+          <MetricCard
+            value={hasLaunchAngle ? shot.launch_angle_vertical!.toFixed(1) : '—'}
+            unit={hasLaunchAngle ? '°' : undefined}
+            label="Launch Angle"
+            subtext={
+              hasLaunchAngle && shot.launch_angle_horizontal !== null
+                ? `${shot.launch_angle_horizontal > 0 ? '+' : ''}${shot.launch_angle_horizontal.toFixed(1)}° H`
+                : undefined
+            }
+            variant="secondary"
+            confidence={hasLaunchAngle ? getLaunchAngleQuality(shot.launch_angle_confidence) : null}
+          />
+          <MetricCard
+            value={hasSpin ? formatSpinRpm(shot.spin_rpm!) : '—'}
+            unit={hasSpin ? 'rpm' : undefined}
+            label="Spin Rate"
+            variant="spin"
+            confidence={hasSpin ? shot.spin_quality : null}
           />
         </div>
       </div>

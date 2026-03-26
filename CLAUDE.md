@@ -117,19 +117,32 @@ npm run build    # Production build
 npm run lint     # ESLint
 ```
 
+### Radar Setup (One-Time)
+
+The OPS243-A must have rolling buffer mode saved to persistent memory for hardware triggers to work.
+This is due to a firmware bug where HOST_INT pin mode switches when transitioning modes at runtime.
+
+```bash
+# Configure and save rolling buffer mode to flash (one-time)
+uv run python scripts/test_rolling_buffer_persist.py --setup
+# Power cycle the radar (unplug USB, wait 3s, replug)
+uv run python scripts/test_rolling_buffer_persist.py --test
+```
+
 ### Running the Application
 
 ```bash
-scripts/start-kiosk.sh              # Default: kiosk mode with real radar
+scripts/start-kiosk.sh              # Default: rolling buffer + sound trigger
 scripts/start-kiosk.sh --mock       # Development mode without hardware
-scripts/start-kiosk.sh --mode rolling-buffer --trigger sound  # Rolling buffer with direct hardware sound trigger (recommended)
-scripts/start-kiosk.sh --mode rolling-buffer --trigger sound-gpio  # Rolling buffer with GPIO software sound trigger (fallback)
-scripts/start-kiosk.sh --mode rolling-buffer --trigger speed  # Rolling buffer with speed-based trigger
+scripts/start-kiosk.sh --mode streaming  # Streaming mode (no spin detection)
 ```
 
 ### Sound Trigger Testing
 
 ```bash
+# Test persistent rolling buffer + hardware trigger (recommended)
+uv run python scripts/test_rolling_buffer_persist.py --test
+
 # Test direct hardware sound trigger (GATE → Level Shifter → HOST_INT)
 uv run python scripts/test_sound_trigger_hardware.py
 

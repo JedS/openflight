@@ -3,6 +3,12 @@
   DIY Golf Launch Monitor using the OPS243-A Doppler Radar.
 </p>
 
+<p align="center">
+  <a href="https://buymeacoffee.com/colemangolfs">
+    <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee" />
+  </a>
+</p>
+
 > [!WARNING]
 > **This project is in active development.** Features may be incomplete, unstable, or change without notice. Expect bugs and breaking changes. Contributions and bug reports are welcome!
 
@@ -80,7 +86,7 @@ openflight-server --no-camera
 openflight-server --mode rolling-buffer
 
 # Rolling buffer with sound trigger (requires SparkFun SEN-14262)
-openflight-server --mode rolling-buffer --trigger sound-passthrough
+openflight-server --mode rolling-buffer --trigger sound
 ```
 
 Then open http://localhost:8080 in a browser.
@@ -411,12 +417,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines. Quick summary:
 - **Tests required**: Run `pytest tests/ -v` before submitting a PR
 - **Code quality**: Run `pylint src/openflight/` (score 9+)
 - **UI changes**: Run `cd ui && npm run build` to verify
+- **UI formatting**: If your IDE does not include automatic "format-on-save," run `cd ui && npm run format` to format TypeScript/React files. 
+  - Note: editors like Zed, WebStorm, and VS Code (with the [Prettier extension](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)) will pick it up automatically and format when saving.
 
 ## Documentation
 
 - [Raspberry Pi Setup Guide](docs/raspberry-pi-setup.md) - Complete Pi 5 setup with touchscreen and camera
 - [Parts List](docs/PARTS.md) - Full hardware requirements
 - [Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md) - Spin rate measurement via I/Q analysis
+- [Sound Trigger Wiring](docs/sound-trigger-wiring.md) - MOSFET circuit for sound-triggered capture
+- [Observability & Log Shipping](docs/observability.md) - Ship session logs to Grafana Cloud with Alloy
 - [YOLO Performance Tuning](docs/yolo-performance-tuning.md) - Optimize YOLO ball detection FPS
 - [Contributing Guide](CONTRIBUTING.md) - How to contribute
 - [Changelog](docs/CHANGELOG.md) - Version history

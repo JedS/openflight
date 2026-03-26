@@ -1,209 +1,297 @@
 #!/usr/bin/env python3
 """
-Capture raw I/Q data from continuous streaming mode and save to pickle file.
-This allows offline analysis and debugging of signal processing.
+Capture raw I/Q data from rolling buffer mode via hardware trigger.
+
+Waits for the sound trigger (SEN-14262 → HOST_INT) to fire, captures the
+I/Q buffer dump, runs it through the processor, prints live results,
+and saves all captures to a .pkl file for offline analysis.
+
+The radar must already be in persistent rolling buffer mode (see --setup
+in test_rolling_buffer_persist.py). This script does NOT send GC — it
+assumes the board was configured with A! and power cycled.
 
 Usage:
-    python scripts/capture_iq.py [output_file.pkl]
+    uv run python scripts/capture_iq.py
+    uv run python scripts/capture_iq.py --pre-trigger 32 --sample-rate 30
+    uv run python scripts/capture_iq.py -o my_captures.pkl
 
-Default output: ~/openflight_sessions/iq_captures_YYYYMMDD_HHMMSS.pkl
+To analyze afterwards:
+    uv run python src/analysis/analyze_capture.py ~/openflight_sessions/capture_*.pkl
 """
 
+import argparse
 import pickle
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from threading import Event
-from typing import List
 
 import numpy as np
 
-from openflight.ops243 import IQBlock, OPS243Radar
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from openflight.ops243 import OPS243Radar
+from openflight.rolling_buffer.processor import RollingBufferProcessor
 
 
-# Capture settings
-SAMPLE_RATE = 30000  # Hz
-WINDOW_SIZE = 128    # Samples per block (matches radar buffer size)
-
-
-def block_to_capture(block: IQBlock, start_time: float) -> dict:
+def capture_to_dict(capture, sample_rate_hz, capture_idx):
     """
-    Convert an IQBlock to the capture dict format expected by analysis scripts.
+    Convert an IQCapture to the dict format expected by analyze_capture.py.
 
-    Args:
-        block: IQBlock from streaming
-        start_time: Reference time for calculating sample_time
-
-    Returns:
-        Dict with complex_signal, sample_time, and raw data
+    Builds complex_signal from raw I/Q for compatibility with the analysis
+    pipeline (time domain plots, spectrogram, FFT).
     """
-    i_samples = np.array(block.i_samples, dtype=np.int16)
-    q_samples = np.array(block.q_samples, dtype=np.int16)
+    i_samples = np.array(capture.i_samples, dtype=np.int16)
+    q_samples = np.array(capture.q_samples, dtype=np.int16)
 
-    # Compute derived values (same as streaming/processor.py)
+    # Center and scale (12-bit ADC, 3.3V reference)
     i_centered = i_samples.astype(np.float64) - np.mean(i_samples)
     q_centered = q_samples.astype(np.float64) - np.mean(q_samples)
-
-    # Scale to voltage (12-bit ADC, 3.3V reference)
     i_scaled = i_centered * (3.3 / 4096)
     q_scaled = q_centered * (3.3 / 4096)
 
-    # Complex signal (standard I + jQ)
     complex_signal = i_scaled + 1j * q_scaled
 
-    # sample_time is relative to capture start (what analysis script expects)
-    sample_time = block.timestamp - start_time
+    # sample_time relative to capture start (index-based, seconds)
+    sample_time = capture_idx * (len(i_samples) / sample_rate_hz)
 
     return {
         "sample_time": sample_time,
-        "i_raw": i_samples,
-        "q_raw": q_samples,
-        "i_centered": i_centered,
-        "q_centered": q_centered,
-        "i_scaled": i_scaled,
-        "q_scaled": q_scaled,
+        "radar_sample_time": capture.sample_time,
+        "radar_trigger_time": capture.trigger_time,
+        "trigger_offset_ms": capture.trigger_offset_ms,
+        "i_samples": i_samples,
+        "q_samples": q_samples,
         "complex_signal": complex_signal,
         "capture_timestamp": datetime.now().isoformat(),
-        "block_timestamp": block.timestamp,
     }
 
 
 def main():
-    # Output file - save to ~/openflight_sessions by default
-    if len(sys.argv) > 1:
-        output_path = Path(sys.argv[1]).expanduser().resolve()
+    parser = argparse.ArgumentParser(
+        description="Capture I/Q data from rolling buffer mode via hardware trigger",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+    # Basic capture (Ctrl+C to stop and save)
+    uv run python scripts/capture_iq.py
+
+    # With custom pre-trigger and sample rate
+    uv run python scripts/capture_iq.py --pre-trigger 32 --sample-rate 30
+
+    # Analyze saved captures
+    uv run python src/analysis/analyze_capture.py ~/openflight_sessions/capture_*.pkl
+        """,
+    )
+    parser.add_argument(
+        "-o", "--output", help="Output .pkl file path (default: auto-generated in ~/openflight_sessions)"
+    )
+    parser.add_argument(
+        "--port", help="Serial port for radar (auto-detect if not specified)"
+    )
+    parser.add_argument(
+        "--pre-trigger", "-p", type=int, default=16,
+        help="Pre-trigger segments S#n, 0-32 (default: 16 = 50/50 split)"
+    )
+    parser.add_argument(
+        "--buffer-split", "-b",
+        choices=["balanced", "post-heavy", "pre-heavy"],
+        help="Buffer split preset (overrides --pre-trigger): "
+             "balanced=S#16 (50/50), post-heavy=S#12 (37/63), pre-heavy=S#24 (75/25)"
+    )
+    parser.add_argument(
+        "--sample-rate", "-s", type=int, default=30,
+        help="Sample rate in ksps (default: 30)"
+    )
+    parser.add_argument(
+        "--timeout", "-t", type=float, default=60.0,
+        help="Timeout waiting for each trigger in seconds (default: 60)"
+    )
+    parser.add_argument(
+        "--max-captures", "-n", type=int, default=0,
+        help="Stop after N captures (default: 0 = unlimited, Ctrl+C to stop)"
+    )
+    args = parser.parse_args()
+
+    # Resolve buffer split preset
+    if args.buffer_split:
+        presets = {"balanced": 16, "post-heavy": 12, "pre-heavy": 24}
+        args.pre_trigger = presets[args.buffer_split]
+
+    # Output file
+    if args.output:
+        output_path = Path(args.output).expanduser().resolve()
     else:
         output_dir = Path.home() / "openflight_sessions"
         output_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = output_dir / f"iq_captures_{timestamp}.pkl"
+        output_path = output_dir / f"capture_{timestamp}.pkl"
 
-    print("=== I/Q Capture Tool (Streaming Mode) ===")
-    print(f"Output file: {output_path}")
+    sample_rate_hz = args.sample_rate * 1000
+    segment_ms = 128 / sample_rate_hz * 1000
+    pre_ms = args.pre_trigger * segment_ms
+    post_ms = (32 - args.pre_trigger) * segment_ms
+    total_ms = 4096 / sample_rate_hz * 1000
+
+    print("=" * 60)
+    print("  I/Q Capture Tool (Rolling Buffer + Hardware Trigger)")
+    print("=" * 60)
+    print()
+    print(f"  Output:       {output_path}")
+    print(f"  Sample rate:  S={args.sample_rate} ({sample_rate_hz} Hz)")
+    print(f"  Pre-trigger:  S#{args.pre_trigger} ({pre_ms:.1f}ms pre / {post_ms:.1f}ms post)")
+    print(f"  Buffer:       4096 samples = {total_ms:.1f}ms total")
+    print(f"  Timeout:      {args.timeout}s per trigger")
+    if args.max_captures > 0:
+        print(f"  Max captures: {args.max_captures}")
+    print()
+
+    # Connect to radar
     print("Connecting to radar...")
-
-    radar = OPS243Radar()
+    radar = OPS243Radar(port=args.port if args.port else None)
     radar.connect()
+    print(f"  Connected on: {radar.port}")
 
-    # Configure for I/Q streaming FIRST
-    print("Configuring for continuous I/Q streaming...")
-    radar.configure_for_iq_streaming()
-
-    # Get radar info AFTER configuration to verify settings
     info = radar.get_info()
-    print(f"\nRadar: {info.get('Product', 'unknown')} v{info.get('Version', 'unknown')}")
-    print(f"Sample Rate: {info.get('SamplingRate', 'unknown')}")
-    print(f"Buffer Size: {info.get('SampleSize', 'unknown')}")
-    print(f"FFT Size: {info.get('FFTSize', 'unknown')}")
-    print(f"FFT Scale: {info.get('FFTScale', 'unknown')}")
+    print(f"  Firmware: {info.get('Version', 'unknown')}")
+    print()
 
-    captures: List[dict] = []
-    start_time: float = 0
-    stop_event = Event()
+    # Arm rolling buffer — board should already be in GC mode (persistent).
+    # We just need PA + S#n to start sampling.
+    print(f"Arming rolling buffer (PA, S#{args.pre_trigger})...")
+    radar.rearm_rolling_buffer(pre_trigger_segments=args.pre_trigger)
+    print("  Armed — waiting for triggers")
+    print()
 
+    processor = RollingBufferProcessor(sample_rate=sample_rate_hz)
+
+    captures = []
     metadata = {
         "radar_info": info,
         "capture_start": datetime.now().isoformat(),
-        "sample_rate": SAMPLE_RATE,
+        "sample_rate": sample_rate_hz,
+        "sample_rate_ksps": args.sample_rate,
+        "pre_trigger_segments": args.pre_trigger,
         "fft_size": 4096,
-        "window_size": WINDOW_SIZE,
-        "mode": "iq_streaming",
+        "window_size": 128,
+        "mode": "rolling_buffer",
     }
 
-    # Stats tracking
-    block_count = 0
-    last_print_time = time.time()
-    blocks_since_print = 0
+    capture_count = 0
+    valid_count = 0
 
-    def on_block(block: IQBlock):
-        nonlocal block_count, start_time, last_print_time, blocks_since_print
-
-        # Set start time on first block
-        if block_count == 0:
-            start_time = block.timestamp
-
-        block_count += 1
-        blocks_since_print += 1
-
-        # Convert and store
-        capture = block_to_capture(block, start_time)
-        captures.append(capture)
-
-        # Show stats every second
-        now = time.time()
-        if now - last_print_time >= 1.0:
-            # Calculate activity from recent blocks
-            recent = captures[-blocks_since_print:] if blocks_since_print > 0 else []
-            if recent:
-                i_ranges = [c['i_raw'].max() - c['i_raw'].min() for c in recent]
-                q_ranges = [c['q_raw'].max() - c['q_raw'].min() for c in recent]
-                max_range = max(max(i_ranges), max(q_ranges))
-
-                if max_range > 1000:
-                    activity = "HIGH ACTIVITY"
-                elif max_range > 200:
-                    activity = "medium"
-                else:
-                    activity = "low/noise"
-            else:
-                activity = "..."
-
-            elapsed = now - (start_time if start_time else now)
-            rate = blocks_since_print / (now - last_print_time)
-            print(f"[{block_count:5d} blocks, {elapsed:6.1f}s] {rate:5.1f} blocks/sec - {activity}")
-
-            last_print_time = now
-            blocks_since_print = 0
-
-    def on_error(error: str):
-        print(f"[ERROR] {error}")
-
-    print("\nCapturing I/Q data continuously.")
-    print("Swing a club or hit balls to capture motion data.")
-    print("Press Ctrl+C to stop and save\n")
+    print("-" * 60)
+    print("Waiting for hardware trigger (sound -> HOST_INT)...")
+    print("Hit a golf ball or clap near the sensor.")
+    print("Ctrl+C to stop and save.")
+    print("-" * 60)
+    print()
 
     try:
-        radar.start_iq_streaming(callback=on_block, error_callback=on_error)
+        while True:
+            if args.max_captures > 0 and capture_count >= args.max_captures:
+                print(f"\nReached max captures ({args.max_captures}), stopping.")
+                break
 
-        # Wait for Ctrl+C
-        while not stop_event.is_set():
-            time.sleep(0.1)
+            # Wait for hardware trigger
+            response = radar.wait_for_hardware_trigger(timeout=args.timeout)
+
+            if not response:
+                print(f"  [{capture_count + 1}] Timeout — no trigger in {args.timeout}s")
+                continue
+
+            capture_count += 1
+            response_len = len(response)
+
+            # Parse I/Q data
+            capture = processor.parse_capture(response)
+            if not capture:
+                print(f"  #{capture_count}: PARSE FAILED ({response_len} bytes)")
+                radar.rearm_rolling_buffer(pre_trigger_segments=args.pre_trigger)
+                continue
+
+            # Run full pipeline
+            result = processor.process_capture(capture)
+
+            # Print live results
+            trigger_offset = capture.trigger_offset_ms
+            if result:
+                valid_count += 1
+                spin_str = ""
+                if result.spin and result.spin.spin_rpm > 0:
+                    spin_str = (
+                        f"  spin={result.spin.spin_rpm:.0f}rpm "
+                        f"(snr={result.spin.snr:.1f}, {result.spin.quality})"
+                    )
+                club_str = f"  club={result.club_speed_mph:.1f}mph" if result.club_speed_mph else ""
+                smash_str = f"  smash={result.smash_factor:.2f}" if result.smash_factor else ""
+
+                print(
+                    f"  #{capture_count}: ball={result.ball_speed_mph:.1f}mph"
+                    f"{club_str}{smash_str}{spin_str}"
+                    f"  (trigger@{trigger_offset:.1f}ms, {response_len}B)"
+                )
+            else:
+                timeline = processor.process_standard(capture)
+                outbound = [r for r in timeline.readings if r.is_outbound]
+                peak = max((r.speed_mph for r in outbound), default=0)
+                print(
+                    f"  #{capture_count}: NO SHOT (peak outbound={peak:.1f}mph, "
+                    f"{len(outbound)} readings, trigger@{trigger_offset:.1f}ms)"
+                )
+
+            # Convert and store for pkl
+            capture_dict = capture_to_dict(capture, sample_rate_hz, capture_count - 1)
+            if result:
+                capture_dict["ball_speed_mph"] = round(result.ball_speed_mph, 1)
+                capture_dict["club_speed_mph"] = round(result.club_speed_mph, 1) if result.club_speed_mph else None
+                capture_dict["smash_factor"] = round(result.smash_factor, 2) if result.smash_factor else None
+                if result.spin:
+                    capture_dict["spin_rpm"] = round(result.spin.spin_rpm)
+                    capture_dict["spin_snr"] = round(result.spin.snr, 1)
+                    capture_dict["spin_quality"] = result.spin.quality
+            captures.append(capture_dict)
+
+            # Re-arm for next trigger
+            radar.rearm_rolling_buffer(pre_trigger_segments=args.pre_trigger)
 
     except KeyboardInterrupt:
-        print(f"\n\nStopping... captured {block_count} blocks")
+        print()
+
     finally:
-        radar.stop_streaming()
+        print()
+        print("=" * 60)
+        print("  CAPTURE SUMMARY")
+        print("=" * 60)
+        print(f"  Total triggers:  {capture_count}")
+        print(f"  Valid captures:  {valid_count}")
+        if capture_count > 0:
+            print(f"  Success rate:    {valid_count / capture_count * 100:.0f}%")
+
+        # Save to pickle
+        if captures:
+            metadata["capture_end"] = datetime.now().isoformat()
+            metadata["total_captures"] = len(captures)
+            metadata["valid_captures"] = valid_count
+
+            output_data = {
+                "metadata": metadata,
+                "captures": captures,
+            }
+
+            with open(output_path, "wb") as f:
+                pickle.dump(output_data, f)
+
+            print(f"  Output file:     {output_path}")
+            print(f"  File size:       {output_path.stat().st_size / 1024:.1f} KB")
+            print()
+            print("  To analyze:")
+            print(f"    uv run python src/analysis/analyze_capture.py {output_path}")
+        else:
+            print("\n  No captures to save.")
+
+        print("=" * 60)
         radar.disconnect()
-
-    # Save to pickle
-    if captures:
-        metadata["capture_end"] = datetime.now().isoformat()
-        metadata["total_blocks"] = len(captures)
-        metadata["duration_seconds"] = captures[-1]["sample_time"] if captures else 0
-
-        output_data = {
-            "metadata": metadata,
-            "captures": captures,
-        }
-
-        with open(output_path, "wb") as f:
-            pickle.dump(output_data, f)
-
-        print(f"\nSaved {len(captures)} captures to {output_path}")
-        print(f"File size: {output_path.stat().st_size / 1024:.1f} KB")
-        print(f"Duration: {metadata['duration_seconds']:.1f} seconds")
-
-        print("\nTo analyze:")
-        print(f"  cd src/analysis && python analyze_capture.py")
-        print(f"  # or load directly:")
-        print(f"  import pickle")
-        print(f"  with open('{output_path}', 'rb') as f:")
-        print(f"      data = pickle.load(f)")
-        print(f"  # data['captures'][i]['complex_signal'] - complex I/Q signal")
-        print(f"  # data['captures'][i]['sample_time'] - time offset in seconds")
-    else:
-        print("\nNo captures to save.")
 
 
 if __name__ == "__main__":

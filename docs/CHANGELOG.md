@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Persistent rolling buffer mode workaround for OPS243-A HOST_INT pin bug (per OmniPreSense)
+  - `persist_rolling_buffer_mode()` method saves settings to flash memory
+  - `test_rolling_buffer_persist.py` script for one-time radar setup and verification
+  - Rolling buffer + sound trigger is now the default operating mode
+- Grafana Alloy integration for shipping session logs to Grafana Cloud Loki
+  - Setup script (`scripts/setup_alloy.sh`) and config (`config/alloy.alloy`)
+  - Auto-starts with `start-kiosk.sh` when credentials are configured
+  - Observability documentation with LogQL query examples
+- Launch angle estimation from club type and ball speed (fallback when camera unavailable)
+- Tunable Hough circle detection with all 5 parameters as CLI args (`--hough-param1`, `--hough-param2`, `--hough-min-radius`, `--hough-max-radius`, `--hough-min-dist`)
+- Interactive `--tune` mode in `test_launch_angle.py` with live OpenCV trackbar sliders
+- Mock mode now simulates realistic spin and launch angle data (TrackMan-based per-club averages)
+- Sound trigger wiring guide with MOSFET circuit design (`docs/sound-trigger-wiring.md`)
 - Camera integration with real-time ball detection in UI
 - Ball detection indicator in header (shows detection status)
 - Camera tab with live MJPEG stream and detection overlay
@@ -17,7 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rolling buffer mode for experimental spin rate detection
 - Session logging to JSONL files (`~/openflight_sessions/`)
 - I/Q streaming mode with FFT and 2D CFAR noise rejection
-- `--hough-param2` flag for tuning detection sensitivity
 - `--mode rolling-buffer` flag for spin detection
 - `--session-location` and `--log-dir` flags for session logging
 - Roboflow API integration as optional detection backend
@@ -27,10 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rolling buffer spin detection documentation
 
 ### Changed
+- Spin detection improved: Hann windowing, zero-padding to 256 points, band-limited search
+- All shot metrics (spin, launch angle, club speed, carry) always shown in UI
+- Shot logging unified — all metrics in single `shot_detected` entry
+- Shot `mode` and `readings_data` are now proper dataclass fields (no more monkey-patching)
+- Session logging enabled in mock mode for testing Alloy integration
 - Default ball detection uses Hough circles instead of YOLO (no ML model required)
 - Camera enabled by default in kiosk mode (use `--no-camera` to disable)
 - Dropped Python 3.9 support (requires >=3.10)
-- Updated Raspberry Pi setup guide with camera UI instructions
+- Updated Raspberry Pi setup guide with camera UI and observability instructions
 
 ## [0.2.0] - 2024-12-01
 

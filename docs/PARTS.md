@@ -54,17 +54,6 @@ SEN-14262                    BREADBOARD                         OPS243-A
 
 See [sound-trigger-wiring.md](sound-trigger-wiring.md) for detailed step-by-step instructions.
 
-### Alternative: GPIO Passthrough Method
-
-If you don't have MOSFETs, the Pi can act as a software-controlled trigger with slightly higher latency:
-
-```
-SEN-14262 GATE → GPIO17 (pin 11) [input]
-GPIO27 (pin 13) → HOST_INT (J3 Pin 3) [output]
-```
-
-**Trigger Latency:** ~10μs (lgpio C callback) - use `--trigger sound-passthrough`.
-
 ## IR Illumination (for camera)
 
 | Part | Description | Link | ~Price |

@@ -14,9 +14,26 @@ MOCK_MODE=false
 RADAR_LOG=false
 DEBUG_MODE=false
 NO_CAMERA=false  # Camera auto-enabled by default (uses Hough + ByteTrack)
-MODE=""
-TRIGGER=""
+MODE="rolling-buffer"  # Default: rolling buffer mode (requires one-time radar setup)
+TRIGGER="sound"  # Default: hardware sound trigger (SEN-14262 → HOST_INT)
 SOUND_PRE_TRIGGER=""
+BUFFER_SPLIT=""
+
+# Buffer split presets (pre/post trigger segments out of 32 total)
+# At 20ksps: each segment = 6.4ms, total buffer = 204.8ms
+# At 30ksps: each segment = 4.27ms, total buffer = 136.5ms
+#
+#   balanced  = S#16 — 50/50 split (recommended starting point)
+#   post-heavy = S#12 — 37/63 split (more ball flight, less backswing)
+#   pre-heavy  = S#24 — 75/25 split (more backswing, some ball flight)
+resolve_buffer_split() {
+    case "$1" in
+        balanced)   echo 16 ;;
+        post-heavy) echo 12 ;;
+        pre-heavy)  echo 24 ;;
+        *)          echo "$1" ;;  # raw number passthrough
+    esac
+}
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -49,6 +66,14 @@ while [[ $# -gt 0 ]]; do
             SOUND_PRE_TRIGGER="$2"
             shift 2
             ;;
+        --buffer-split)
+            BUFFER_SPLIT="$2"
+            shift 2
+            ;;
+        --sample-rate)
+            SAMPLE_RATE="$2"
+            shift 2
+            ;;
         --port|-p)
             PORT="$2"
             shift 2
@@ -58,6 +83,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Resolve buffer split preset to a number (overrides --sound-pre-trigger)
+if [ -n "$BUFFER_SPLIT" ]; then
+    SOUND_PRE_TRIGGER=$(resolve_buffer_split "$BUFFER_SPLIT")
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -141,11 +171,46 @@ if [ -n "$SOUND_PRE_TRIGGER" ]; then
     SERVER_CMD="$SERVER_CMD --sound-pre-trigger $SOUND_PRE_TRIGGER"
 fi
 
+if [ -n "$SAMPLE_RATE" ]; then
+    SERVER_CMD="$SERVER_CMD --sample-rate $SAMPLE_RATE"
+fi
+
+# Start Grafana Alloy for log shipping (if installed and credentials configured)
+if command -v alloy &> /dev/null || systemctl is-enabled alloy &> /dev/null 2>&1; then
+    if sudo test -f /etc/alloy/credentials.env; then
+        # Check if credentials are actually filled in (not just the template)
+        if sudo grep -q "LOKI_URL=https\?://" /etc/alloy/credentials.env 2>/dev/null; then
+            if ! systemctl is-active alloy &> /dev/null 2>&1; then
+                log "Starting Grafana Alloy for log shipping..."
+                sudo systemctl start alloy 2>/dev/null || warn "Failed to start Alloy (try: sudo systemctl start alloy)"
+            else
+                log "Grafana Alloy already running (log shipping active)"
+            fi
+        else
+            warn "Alloy installed but credentials not configured (/etc/alloy/credentials.env)"
+        fi
+    else
+        warn "Alloy installed but no credentials file found (run: sudo scripts/setup_alloy.sh)"
+    fi
+else
+    warn "Grafana Alloy not installed — session logs will only be saved locally"
+    warn "  Install with: sudo scripts/setup_alloy.sh"
+fi
+
 # Start the server
 if [ "$MOCK_MODE" = true ]; then
     log "Starting OpenFlight server on port $PORT (MOCK MODE)..."
 else
     log "Starting OpenFlight server on port $PORT..."
+    if [ -n "$MODE" ]; then
+        log "Mode: $MODE"
+    fi
+    if [ -n "$TRIGGER" ]; then
+        log "Trigger: $TRIGGER"
+    fi
+    if [ -n "$SOUND_PRE_TRIGGER" ]; then
+        log "Buffer split: S#$SOUND_PRE_TRIGGER ($SOUND_PRE_TRIGGER pre / $((32 - SOUND_PRE_TRIGGER)) post segments)"
+    fi
 fi
 
 if [ "$DEBUG_MODE" = true ]; then

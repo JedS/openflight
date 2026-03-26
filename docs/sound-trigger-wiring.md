@@ -337,18 +337,6 @@ Make a sound near the sensor... (Ctrl+C to quit)
 
 ---
 
-## Alternative: GPIO Passthrough Method
-
-If you don't have MOSFETs, you can use the Pi's GPIO as a software-controlled trigger. This has higher latency (~10μs with lgpio callbacks) but requires no additional components.
-
-See [PARTS.md](PARTS.md) for GPIO passthrough wiring, or use:
-
-```bash
-scripts/start-kiosk.sh --mode rolling-buffer --trigger sound-passthrough
-```
-
----
-
 ## Running the Launch Monitor
 
 Once wiring is complete and tested, start the launch monitor with hardware sound triggering:

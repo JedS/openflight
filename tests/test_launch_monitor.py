@@ -7,6 +7,7 @@ from openflight.launch_monitor import (
     Shot,
     ClubType,
     estimate_carry_distance,
+    adjust_carry_for_launch_angle,
     LaunchMonitor,
 )
 
@@ -131,6 +132,34 @@ class TestShot:
 
         assert low == pytest.approx(estimate * 0.90, rel=0.01)
         assert high == pytest.approx(estimate * 1.10, rel=0.01)
+
+    def test_carry_adjusts_for_launch_angle(self):
+        """Shot with launch angle should adjust carry distance."""
+        shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
+        shot_low_angle = Shot(
+            ball_speed_mph=150.0, timestamp=datetime.now(),
+            launch_angle_vertical=7.0,  # well below 11 optimal for driver
+            launch_angle_confidence=1.0,
+        )
+        assert shot_low_angle.estimated_carry_yards < shot_no_angle.estimated_carry_yards
+
+    def test_carry_unchanged_without_launch_angle(self):
+        """Shot without launch angle should use current behavior."""
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
+        base = estimate_carry_distance(150.0, ClubType.DRIVER)
+        assert shot.estimated_carry_yards == base
+
+    def test_carry_range_tighter_with_angle(self):
+        """Shot with launch angle should have tighter carry range."""
+        shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
+        shot_angle = Shot(
+            ball_speed_mph=150.0, timestamp=datetime.now(),
+            launch_angle_vertical=11.0,
+            launch_angle_confidence=0.5,
+        )
+        no_angle_spread = shot_no_angle.estimated_carry_range[1] - shot_no_angle.estimated_carry_range[0]
+        angle_spread = shot_angle.estimated_carry_range[1] - shot_angle.estimated_carry_range[0]
+        assert angle_spread < no_angle_spread
 
 
 class TestLaunchMonitorSessionStats:
@@ -464,6 +493,60 @@ class TestClubBallSeparation:
         shot = self.monitor._shots[0]
         assert shot.club_speed_mph == 100.0
         assert shot.smash_factor == 1.4
+
+
+class TestAdjustCarryForLaunchAngle:
+    """Tests for launch-angle-based carry distance adjustment."""
+
+    def test_optimal_angle_no_penalty(self):
+        """Optimal launch angle should return base carry unchanged."""
+        result = adjust_carry_for_launch_angle(
+            base_carry=250, launch_angle=11.0, club=ClubType.DRIVER, confidence=0.5
+        )
+        assert result == pytest.approx(250, abs=1)
+
+    def test_low_angle_reduces_carry(self):
+        """Below-optimal launch angle should reduce carry."""
+        result = adjust_carry_for_launch_angle(
+            base_carry=250, launch_angle=7.0, club=ClubType.DRIVER, confidence=1.0
+        )
+        # 4 degrees low * 2.0 yards/deg = -8 yards
+        assert result < 250
+        assert result == pytest.approx(242, abs=1)
+
+    def test_high_angle_reduces_carry(self):
+        """Above-optimal launch angle should reduce carry (less severe)."""
+        result = adjust_carry_for_launch_angle(
+            base_carry=250, launch_angle=16.0, club=ClubType.DRIVER, confidence=1.0
+        )
+        # 5 degrees high * 1.5 yards/deg = -7.5 yards
+        assert result < 250
+        assert result == pytest.approx(242.5, abs=1)
+
+    def test_confidence_scaling(self):
+        """Low confidence should reduce the adjustment magnitude."""
+        full_conf = adjust_carry_for_launch_angle(
+            base_carry=250, launch_angle=7.0, club=ClubType.DRIVER, confidence=1.0
+        )
+        low_conf = adjust_carry_for_launch_angle(
+            base_carry=250, launch_angle=7.0, club=ClubType.DRIVER, confidence=0.2
+        )
+        assert low_conf > full_conf
+        assert low_conf < 250
+
+    def test_penalty_capped_at_10_percent(self):
+        """Carry penalty should never exceed 10% of base carry."""
+        result = adjust_carry_for_launch_angle(
+            base_carry=250, launch_angle=0.0, club=ClubType.DRIVER, confidence=1.0
+        )
+        assert result >= 250 * 0.90
+
+    def test_iron_optimal_angle(self):
+        """Iron clubs should use their own optimal launch angle."""
+        result = adjust_carry_for_launch_angle(
+            base_carry=150, launch_angle=20.5, club=ClubType.IRON_7, confidence=0.5
+        )
+        assert result == pytest.approx(150, abs=1)
 
 
 class TestMultiObjectReporting:

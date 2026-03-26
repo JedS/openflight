@@ -19,6 +19,7 @@ from .streaming import StreamingSpeedDetector
 
 class ClubType(Enum):
     """Golf club types for distance estimation."""
+
     DRIVER = "driver"
     WOOD_3 = "3-wood"
     WOOD_5 = "5-wood"
@@ -40,6 +41,32 @@ class ClubType(Enum):
     SW = "sw"
     LW = "lw"
     UNKNOWN = "unknown"
+
+
+# Optimal launch angles by club (from TrackMan data)
+_OPTIMAL_LAUNCH = {
+    ClubType.DRIVER: 11.0,
+    ClubType.WOOD_3: 12.5,
+    ClubType.WOOD_5: 14.0,
+    ClubType.WOOD_7: 15.5,
+    ClubType.HYBRID_3: 13.5,
+    ClubType.HYBRID_5: 15.0,
+    ClubType.HYBRID_7: 16.5,
+    ClubType.HYBRID_9: 18.0,
+    ClubType.IRON_2: 13.0,
+    ClubType.IRON_3: 14.5,
+    ClubType.IRON_4: 16.0,
+    ClubType.IRON_5: 17.5,
+    ClubType.IRON_6: 19.0,
+    ClubType.IRON_7: 20.5,
+    ClubType.IRON_8: 23.0,
+    ClubType.IRON_9: 25.5,
+    ClubType.PW: 28.0,
+    ClubType.GW: 30.0,
+    ClubType.SW: 32.0,
+    ClubType.LW: 35.0,
+    ClubType.UNKNOWN: 18.0,
+}
 
 
 def estimate_carry_distance(ball_speed_mph: float, club: ClubType = ClubType.DRIVER) -> float:
@@ -100,7 +127,7 @@ def estimate_carry_distance(ball_speed_mph: float, club: ClubType = ClubType.DRI
     # Based on typical smash factors and launch conditions
     CLUB_FACTORS = {
         ClubType.DRIVER: 1.0,
-        ClubType.WOOD_3: 0.96,    # Slightly less efficient
+        ClubType.WOOD_3: 0.96,  # Slightly less efficient
         ClubType.WOOD_5: 0.93,
         ClubType.WOOD_7: 0.91,
         ClubType.HYBRID_3: 0.91,
@@ -154,6 +181,44 @@ def estimate_carry_distance(ball_speed_mph: float, club: ClubType = ClubType.DRI
     return carry * factor
 
 
+def adjust_carry_for_launch_angle(
+    base_carry: float,
+    launch_angle: float,
+    club: ClubType = ClubType.DRIVER,
+    confidence: float = 1.0,
+) -> float:
+    """
+    Adjust carry distance based on launch angle deviation from optimal.
+
+    Deviation from optimal costs carry:
+    - Too low: -2.0 yards per degree (ball doesn't get enough height)
+    - Too high: -1.5 yards per degree (ball balloons, less severe)
+    - Penalty is scaled by confidence and capped at 10% of base carry.
+
+    Args:
+        base_carry: Base carry distance in yards (from estimate_carry_distance)
+        launch_angle: Measured vertical launch angle in degrees
+        club: Club type (determines optimal launch angle)
+        confidence: Confidence in the launch angle measurement (0-1)
+
+    Returns:
+        Adjusted carry distance in yards
+    """
+    optimal = _OPTIMAL_LAUNCH.get(club, 18.0)
+    angle_delta = launch_angle - optimal
+
+    if angle_delta < 0:
+        raw_penalty = abs(angle_delta) * 2.0
+    else:
+        raw_penalty = angle_delta * 1.5
+
+    penalty = raw_penalty * confidence
+    max_penalty = base_carry * 0.10
+    penalty = min(penalty, max_penalty)
+
+    return base_carry - penalty
+
+
 @dataclass
 class Shot:
     """
@@ -173,7 +238,10 @@ class Shot:
         spin_rpm: Spin rate in RPM (from rolling buffer mode)
         spin_confidence: Confidence in spin measurement (0-1)
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
+        mode: Shot source — "streaming", "rolling-buffer", or "mock"
+        readings_data: Serialized readings for session logging
     """
+
     ball_speed_mph: float
     timestamp: datetime
     club_speed_mph: Optional[float] = None
@@ -186,6 +254,8 @@ class Shot:
     spin_rpm: Optional[float] = None
     spin_confidence: Optional[float] = None
     carry_spin_adjusted: Optional[float] = None
+    mode: str = "streaming"
+    readings_data: Optional[list] = None
 
     @property
     def ball_speed_ms(self) -> float:
@@ -218,15 +288,16 @@ class Shot:
 
     @property
     def estimated_carry_yards(self) -> float:
-        """
-        Estimated carry distance based on ball speed and club type.
-
-        Uses TrackMan-derived lookup table with interpolation, assuming
-        optimal launch conditions (10-14° launch angle for driver).
-
-        Without launch angle and spin data, actual distance may vary ±10-15%.
-        """
-        return estimate_carry_distance(self.ball_speed_mph, self.club)
+        """Estimated carry distance based on ball speed, club type, and launch angle."""
+        base = estimate_carry_distance(self.ball_speed_mph, self.club)
+        if self.launch_angle_vertical is not None:
+            return adjust_carry_for_launch_angle(
+                base,
+                self.launch_angle_vertical,
+                self.club,
+                self.launch_angle_confidence or 0.2,
+            )
+        return base
 
     @property
     def estimated_carry_range(self) -> tuple:
@@ -298,33 +369,33 @@ class LaunchMonitor:
     """
 
     # Speed thresholds
-    MIN_CLUB_SPEED_MPH = 30      # Minimum club speed (allows short game)
-    MAX_CLUB_SPEED_MPH = 140     # Maximum realistic club speed
-    MIN_BALL_SPEED_MPH = 30      # Minimum ball speed (allows chips/pitches)
-    MAX_BALL_SPEED_MPH = 220     # Maximum realistic ball speed
+    MIN_CLUB_SPEED_MPH = 30  # Minimum club speed (allows short game)
+    MAX_CLUB_SPEED_MPH = 140  # Maximum realistic club speed
+    MIN_BALL_SPEED_MPH = 30  # Minimum ball speed (allows chips/pitches)
+    MAX_BALL_SPEED_MPH = 220  # Maximum realistic ball speed
 
     # Signal filtering
-    MIN_MAGNITUDE = 20           # Minimum signal strength to accept reading
-    MIN_SHOT_MAGNITUDE = 100     # Minimum peak magnitude for valid shot (filters walking)
+    MIN_MAGNITUDE = 20  # Minimum signal strength to accept reading
+    MIN_SHOT_MAGNITUDE = 100  # Minimum peak magnitude for valid shot (filters walking)
 
     # Shot detection timing
-    SHOT_TIMEOUT_SEC = 0.5       # Gap to consider shot complete
-    MIN_READINGS_FOR_SHOT = 1    # Lowered: high-speed ball readings are transient (1-2 blocks)
+    SHOT_TIMEOUT_SEC = 0.5  # Gap to consider shot complete
+    MIN_READINGS_FOR_SHOT = 1  # Lowered: high-speed ball readings are transient (1-2 blocks)
     MAX_SHOT_DURATION_SEC = 0.3  # Real shots complete within 300ms
 
     # Club/ball separation parameters
-    CLUB_BALL_WINDOW_SEC = 0.3   # Max time window for club before ball
+    CLUB_BALL_WINDOW_SEC = 0.3  # Max time window for club before ball
     CLUB_SPEED_MIN_RATIO = 0.50  # Club must be >= 50% of ball speed
     CLUB_SPEED_MAX_RATIO = 0.85  # Club must be <= 85% of ball speed
-    SMASH_FACTOR_MIN = 1.1       # Minimum valid smash factor
-    SMASH_FACTOR_MAX = 1.7       # Maximum valid smash factor
+    SMASH_FACTOR_MIN = 1.1  # Minimum valid smash factor
+    SMASH_FACTOR_MAX = 1.7  # Maximum valid smash factor
 
     def __init__(
         self,
         port: Optional[str] = None,
         detect_club_speed: bool = True,
         use_iq_streaming: bool = True,
-        debug: bool = False
+        debug: bool = False,
     ):
         """
         Initialize launch monitor.
@@ -375,8 +446,11 @@ class LaunchMonitor:
         """Get radar module information."""
         return self.radar.get_info()
 
-    def start(self, shot_callback: Optional[Callable[[Shot], None]] = None,
-              live_callback: Optional[Callable[[SpeedReading], None]] = None):
+    def start(
+        self,
+        shot_callback: Optional[Callable[[Shot], None]] = None,
+        live_callback: Optional[Callable[[SpeedReading], None]] = None,
+    ):
         """
         Start monitoring for shots.
 
@@ -400,11 +474,10 @@ class LaunchMonitor:
             self._iq_detector = StreamingSpeedDetector(
                 callback=self._on_reading,
                 config=None,  # Use CFAR-tuned defaults
-                debug=self._debug
+                debug=self._debug,
             )
             self.radar.start_iq_streaming(
-                callback=self._iq_detector.on_block,
-                error_callback=self._on_iq_error
+                callback=self._iq_detector.on_block, error_callback=self._on_iq_error
             )
         else:
             # Use radar's internal speed processing
@@ -446,7 +519,9 @@ class LaunchMonitor:
                 min_speed = self.MIN_BALL_SPEED_MPH
 
             if not min_speed <= reading.speed <= self.MAX_BALL_SPEED_MPH:
-                print(f"[FILTER] Speed {reading.speed:.1f} outside range {min_speed}-{self.MAX_BALL_SPEED_MPH}")
+                print(
+                    f"[FILTER] Speed {reading.speed:.1f} outside range {min_speed}-{self.MAX_BALL_SPEED_MPH}"
+                )
                 return
 
             if reading.direction != Direction.OUTBOUND:
@@ -454,20 +529,26 @@ class LaunchMonitor:
                 return
 
             if reading.magnitude is not None and reading.magnitude < self.MIN_MAGNITUDE:
-                print(f"[FILTER] Magnitude {reading.magnitude:.1f} below minimum {self.MIN_MAGNITUDE}")
+                print(
+                    f"[FILTER] Magnitude {reading.magnitude:.1f} below minimum {self.MIN_MAGNITUDE}"
+                )
                 return
 
         # Show timing info for debugging
         time_gap = (now - self._last_reading_time) if self._last_reading_time else 0
-        print(f"[ACCEPTED] {reading.speed:.1f} mph {reading.direction.value} mag={reading.magnitude:.3f} "
-              f"- buffered: {len(self._current_readings)}, gap: {time_gap*1000:.0f}ms")
+        print(
+            f"[ACCEPTED] {reading.speed:.1f} mph {reading.direction.value} mag={reading.magnitude:.3f} "
+            f"- buffered: {len(self._current_readings)}, gap: {time_gap * 1000:.0f}ms"
+        )
         if logger:
             logger.log_accepted_reading(reading)
 
         # Check if this is part of current shot or new shot
         if self._current_readings and time_gap > self.SHOT_TIMEOUT_SEC:
             # Previous shot complete, process it
-            print(f"[TIMEOUT] {time_gap*1000:.0f}ms gap > {self.SHOT_TIMEOUT_SEC*1000:.0f}ms - processing {len(self._current_readings)} readings")
+            print(
+                f"[TIMEOUT] {time_gap * 1000:.0f}ms gap > {self.SHOT_TIMEOUT_SEC * 1000:.0f}ms - processing {len(self._current_readings)} readings"
+            )
             self._process_shot()
 
         # Track shot start time
@@ -480,10 +561,7 @@ class LaunchMonitor:
         self._last_reading_time = now
 
     def _find_club_speed(
-        self,
-        readings: List[SpeedReading],
-        ball_speed: float,
-        ball_time: float
+        self, readings: List[SpeedReading], ball_speed: float, ball_time: float
     ) -> Optional[SpeedReading]:
         """
         Find club head reading using temporal and magnitude analysis.
@@ -525,8 +603,10 @@ class LaunchMonitor:
                 continue
 
             club_candidates.append(r)
-            print(f"[CLUB CANDIDATE] {r.speed:.1f} mph, mag={r.magnitude}, "
-                  f"dt={((ball_time - r_time) * 1000):.0f}ms before ball")
+            print(
+                f"[CLUB CANDIDATE] {r.speed:.1f} mph, mag={r.magnitude}, "
+                f"dt={((ball_time - r_time) * 1000):.0f}ms before ball"
+            )
 
         if not club_candidates:
             return None
@@ -536,8 +616,10 @@ class LaunchMonitor:
 
         if candidates_with_mag:
             club_reading = max(candidates_with_mag, key=lambda r: r.magnitude)
-            print(f"[CLUB DETECTED] {club_reading.speed:.1f} mph selected by magnitude "
-                  f"(mag={club_reading.magnitude})")
+            print(
+                f"[CLUB DETECTED] {club_reading.speed:.1f} mph selected by magnitude "
+                f"(mag={club_reading.magnitude})"
+            )
         else:
             # No magnitude data - use reading closest in time to ball
             club_reading = max(club_candidates, key=lambda r: r.timestamp or 0)
@@ -546,8 +628,10 @@ class LaunchMonitor:
         # Validate smash factor
         smash = ball_speed / club_reading.speed
         if not (self.SMASH_FACTOR_MIN <= smash <= self.SMASH_FACTOR_MAX):
-            print(f"[CLUB REJECTED] Smash factor {smash:.2f} outside range "
-                  f"{self.SMASH_FACTOR_MIN}-{self.SMASH_FACTOR_MAX}")
+            print(
+                f"[CLUB REJECTED] Smash factor {smash:.2f} outside range "
+                f"{self.SMASH_FACTOR_MIN}-{self.SMASH_FACTOR_MAX}"
+            )
             return None
 
         return club_reading
@@ -567,8 +651,10 @@ class LaunchMonitor:
         """
         if len(self._current_readings) < self.MIN_READINGS_FOR_SHOT:
             speeds = [f"{r.speed:.1f}" for r in self._current_readings]
-            print(f"[REJECTED] Only {len(self._current_readings)} readings "
-                  f"(need {self.MIN_READINGS_FOR_SHOT}): {', '.join(speeds)} mph")
+            print(
+                f"[REJECTED] Only {len(self._current_readings)} readings "
+                f"(need {self.MIN_READINGS_FOR_SHOT}): {', '.join(speeds)} mph"
+            )
             self._current_readings = []
             return
 
@@ -581,8 +667,10 @@ class LaunchMonitor:
         shot_duration = last_time - first_time
 
         if shot_duration > self.MAX_SHOT_DURATION_SEC:
-            print(f"[REJECTED] Shot duration {shot_duration*1000:.0f}ms exceeds "
-                  f"max {self.MAX_SHOT_DURATION_SEC*1000:.0f}ms (likely not a golf shot)")
+            print(
+                f"[REJECTED] Shot duration {shot_duration * 1000:.0f}ms exceeds "
+                f"max {self.MAX_SHOT_DURATION_SEC * 1000:.0f}ms (likely not a golf shot)"
+            )
             self._current_readings = []
             return
 
@@ -599,15 +687,19 @@ class LaunchMonitor:
         # In legacy mode, validate peak magnitude for strong radar returns
         if not self._use_iq_streaming:
             if peak_mag is not None and peak_mag < self.MIN_SHOT_MAGNITUDE:
-                print(f"[REJECTED] Peak magnitude {peak_mag:.0f} below minimum "
-                      f"{self.MIN_SHOT_MAGNITUDE} (weak signal, likely not a golf shot)")
+                print(
+                    f"[REJECTED] Peak magnitude {peak_mag:.0f} below minimum "
+                    f"{self.MIN_SHOT_MAGNITUDE} (weak signal, likely not a golf shot)"
+                )
                 self._current_readings = []
                 return
 
             # Validate ball speed - must be a real golf shot speed
             if ball_speed < self.MIN_BALL_SPEED_MPH:
-                print(f"[REJECTED] Ball speed {ball_speed:.1f} mph below minimum "
-                      f"{self.MIN_BALL_SPEED_MPH} mph (too slow for golf shot)")
+                print(
+                    f"[REJECTED] Ball speed {ball_speed:.1f} mph below minimum "
+                    f"{self.MIN_BALL_SPEED_MPH} mph (too slow for golf shot)"
+                )
                 self._current_readings = []
                 return
 
@@ -618,8 +710,10 @@ class LaunchMonitor:
             if club_reading:
                 club_speed = club_reading.speed
 
-        print(f"[SHOT ANALYSIS] Ball={ball_speed:.1f} mph, Club={club_speed or 'N/A'}, "
-              f"Readings={len(sorted_readings)}")
+        print(
+            f"[SHOT ANALYSIS] Ball={ball_speed:.1f} mph, Club={club_speed or 'N/A'}, "
+            f"Readings={len(sorted_readings)}"
+        )
 
         shot = Shot(
             ball_speed_mph=ball_speed,
@@ -627,42 +721,37 @@ class LaunchMonitor:
             club_speed_mph=club_speed,
             peak_magnitude=peak_mag,
             readings=self._current_readings.copy(),
-            club=self._current_club
+            club=self._current_club,
         )
 
         self._shots.append(shot)
 
         if club_speed:
-            print(f"[SHOT CREATED] Ball: {ball_speed:.1f} mph, Club: {club_speed:.1f} mph, "
-                  f"Smash: {shot.smash_factor:.2f}")
+            print(
+                f"[SHOT CREATED] Ball: {ball_speed:.1f} mph, Club: {club_speed:.1f} mph, "
+                f"Smash: {shot.smash_factor:.2f}"
+            )
         else:
             print(f"[SHOT CREATED] Ball: {ball_speed:.1f} mph (club not detected)")
 
-        # Log shot to session logger
+        # Attach serialized readings for session logging
+        shot.readings_data = [
+            {
+                "speed": r.speed,
+                "direction": r.direction.value,
+                "magnitude": r.magnitude,
+                "timestamp": r.timestamp,
+            }
+            for r in self._current_readings
+        ]
+
+        # Log I/Q blocks for this shot (for post-session analysis)
         logger = get_session_logger()
-        if logger:
-            readings_data = [
-                {"speed": r.speed, "direction": r.direction.value, "magnitude": r.magnitude,
-                 "timestamp": r.timestamp}
-                for r in self._current_readings
-            ]
-            logger.log_shot(
-                ball_speed_mph=ball_speed,
-                club_speed_mph=club_speed,
-                smash_factor=shot.smash_factor,
-                estimated_carry_yards=shot.estimated_carry_yards,
-                club=self._current_club.value,
-                peak_magnitude=peak_mag,
-                readings_count=len(self._current_readings),
-                readings=readings_data
-            )
+        if logger and self._use_iq_streaming and self._iq_detector:
+            shot_number = logger.stats.get("shots_detected", len(self._shots))
+            self._iq_detector.log_iq_for_shot(shot_number)
 
-            # Log I/Q blocks for this shot (for post-session analysis)
-            if self._use_iq_streaming and self._iq_detector:
-                shot_number = logger.stats.get("shots_detected", len(self._shots))
-                self._iq_detector.log_iq_for_shot(shot_number)
-
-        # Callback
+        # Callback (server.py will log the shot with camera data included)
         if self._shot_callback:
             self._shot_callback(shot)
 
@@ -710,7 +799,7 @@ class LaunchMonitor:
                 "min_ball_speed": 0,
                 "avg_club_speed": None,
                 "avg_smash_factor": None,
-                "avg_carry_est": 0
+                "avg_carry_est": 0,
             }
 
         ball_speeds = [s.ball_speed_mph for s in self._shots]
@@ -725,7 +814,7 @@ class LaunchMonitor:
             "std_dev": statistics.stdev(ball_speeds) if len(ball_speeds) > 1 else 0,
             "avg_club_speed": statistics.mean(club_speeds) if club_speeds else None,
             "avg_smash_factor": statistics.mean(smash_factors) if smash_factors else None,
-            "avg_carry_est": statistics.mean([s.estimated_carry_yards for s in self._shots])
+            "avg_carry_est": statistics.mean([s.estimated_carry_yards for s in self._shots]),
         }
 
     def get_shots(self) -> List[Shot]:
@@ -762,7 +851,7 @@ def main():
     parser.add_argument(
         "--no-iq-streaming",
         action="store_true",
-        help="Disable I/Q streaming mode (use radar's internal processing)"
+        help="Disable I/Q streaming mode (use radar's internal processing)",
     )
     args = parser.parse_args()
 
@@ -849,4 +938,5 @@ def main():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(main())
