@@ -56,6 +56,28 @@ class TestShotToDict:
         assert result["smash_factor"] == 1.45  # 2 decimals
 
 
+    def test_angle_source_field(self):
+        """shot_to_dict should include angle_source."""
+        shot = Shot(
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
+            launch_angle_vertical=12.5,
+            launch_angle_confidence=0.8,
+            angle_source="radar",
+        )
+        result = shot_to_dict(shot)
+        assert result["angle_source"] == "radar"
+
+    def test_angle_source_none_by_default(self):
+        """Shot without angle source should have None."""
+        shot = Shot(
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
+        )
+        result = shot_to_dict(shot)
+        assert result["angle_source"] is None
+
+
 class TestEstimateLaunchAngle:
     """Tests for launch angle estimation from club type and ball speed."""
 

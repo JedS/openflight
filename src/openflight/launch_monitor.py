@@ -256,6 +256,7 @@ class Shot:
     carry_spin_adjusted: Optional[float] = None
     mode: str = "streaming"
     readings_data: Optional[list] = None
+    angle_source: Optional[str] = None  # "radar", "camera", "estimated", or None
 
     @property
     def ball_speed_ms(self) -> float:

@@ -57,6 +57,9 @@ debug_mode: bool = False
 debug_log_file = None
 debug_log_path: Optional[Path] = None
 
+# K-LD7 angle radar
+kld7_tracker = None
+
 # Camera state
 camera: Optional["Picamera2"] = None
 camera_tracker: Optional["CameraTracker"] = None
@@ -205,10 +208,11 @@ def shot_to_dict(shot: Shot) -> dict:
         "club": shot.club.value,
         "timestamp": shot.timestamp.isoformat(),
         "peak_magnitude": shot.peak_magnitude,
-        # Launch angle from camera
+        # Launch angle data
         "launch_angle_vertical": shot.launch_angle_vertical,
         "launch_angle_horizontal": shot.launch_angle_horizontal,
         "launch_angle_confidence": shot.launch_angle_confidence,
+        "angle_source": shot.angle_source,
         # Spin data from rolling buffer mode
         "spin_rpm": round(shot.spin_rpm) if shot.spin_rpm else None,
         "spin_confidence": round(shot.spin_confidence, 2) if shot.spin_confidence else None,
@@ -299,6 +303,25 @@ def init_camera(
         print(f"Failed to initialize camera: {e}")
         camera = None
         camera_tracker = None
+        return False
+
+
+def init_kld7(port=None, orientation="vertical") -> bool:
+    """Initialize K-LD7 angle radar tracker."""
+    global kld7_tracker  # pylint: disable=global-statement
+    try:
+        from openflight.kld7 import KLD7Tracker
+
+        kld7_tracker = KLD7Tracker(port=port, orientation=orientation)
+        if kld7_tracker.connect():
+            kld7_tracker.start()
+            return True
+        else:
+            kld7_tracker = None
+            return False
+    except Exception as e:
+        logger.warning("K-LD7 initialization failed: %s", e)
+        kld7_tracker = None
         return False
 
 
@@ -766,17 +789,45 @@ def on_shot_detected(shot: Shot):
 
     logger.debug("Shot callback triggered: %.1f mph", shot.ball_speed_mph)
 
+    # Try K-LD7 angle radar first (highest priority for angle data)
+    try:
+        if kld7_tracker and shot.mode != "mock":
+            kld7_angle = kld7_tracker.get_angle_for_shot()
+            if kld7_angle:
+                if kld7_angle.vertical_deg is not None:
+                    shot.launch_angle_vertical = kld7_angle.vertical_deg
+                    shot.launch_angle_confidence = kld7_angle.confidence
+                    shot.angle_source = "radar"
+                    logger.info(
+                        "K-LD7 vertical angle: %.1f° (conf: %.0f%%, %d frames)",
+                        kld7_angle.vertical_deg, kld7_angle.confidence * 100, kld7_angle.num_frames,
+                    )
+                if kld7_angle.horizontal_deg is not None:
+                    shot.launch_angle_horizontal = kld7_angle.horizontal_deg
+                    if shot.angle_source is None:
+                        shot.angle_source = "radar"
+                        shot.launch_angle_confidence = kld7_angle.confidence
+                    logger.info(
+                        "K-LD7 horizontal angle: %.1f° (conf: %.0f%%)",
+                        kld7_angle.horizontal_deg, kld7_angle.confidence * 100,
+                    )
+            kld7_tracker.reset()
+    except Exception as e:
+        logger.warning("K-LD7 processing error: %s", e)
+
     # Try to get launch angle from camera BEFORE emitting shot
     # Skip camera for mock shots — they already have simulated launch angle
+    # Skip if K-LD7 already provided vertical angle
     camera_data = None
     try:
-        if camera_tracker and camera_enabled and shot.mode != "mock":
+        if camera_tracker and camera_enabled and shot.mode != "mock" and shot.launch_angle_vertical is None:
             launch_angle = camera_tracker.calculate_launch_angle()
             if launch_angle:
                 # Update shot object with launch angle data
                 shot.launch_angle_vertical = launch_angle.vertical
                 shot.launch_angle_horizontal = launch_angle.horizontal
                 shot.launch_angle_confidence = launch_angle.confidence
+                shot.angle_source = "camera"
 
                 camera_data = {
                     "launch_angle_vertical": launch_angle.vertical,
@@ -800,7 +851,7 @@ def on_shot_detected(shot: Shot):
         logger.warning("Camera processing error: %s", e)
         camera_data = None
 
-    # If no camera launch angle, estimate from club type and ball speed
+    # If no camera or radar launch angle, estimate from club type and ball speed
     if shot.launch_angle_vertical is None and shot.mode != "mock":
         estimated = estimate_launch_angle(
             shot.club,
@@ -811,6 +862,7 @@ def on_shot_detected(shot: Shot):
         shot.launch_angle_vertical = estimated[0]
         shot.launch_angle_horizontal = 0.0
         shot.launch_angle_confidence = estimated[1]
+        shot.angle_source = "estimated"
         logger.info(
             "Estimated launch angle: %.1f° (conf: %.0f%%)", estimated[0], estimated[1] * 100
         )
@@ -1274,6 +1326,18 @@ def main():
         default=200,
         help="Debounce time in ms for sound-gpio trigger (default: 200)",
     )
+    parser.add_argument(
+        "--kld7", action="store_true", help="Enable K-LD7 angle radar module"
+    )
+    parser.add_argument(
+        "--kld7-port", default=None, help="K-LD7 serial port (auto-detect if not specified)"
+    )
+    parser.add_argument(
+        "--kld7-orientation",
+        choices=["vertical", "horizontal"],
+        default="vertical",
+        help="K-LD7 mount orientation — which angle plane it measures (default: vertical)",
+    )
     args = parser.parse_args()
 
     # Configure logging - always show INFO and above for openflight modules
@@ -1348,6 +1412,13 @@ def main():
     else:
         print("Camera disabled by --no-camera flag")
 
+    # Initialize K-LD7 angle radar (if enabled)
+    if args.kld7:
+        if init_kld7(port=args.kld7_port, orientation=args.kld7_orientation):
+            print(f"K-LD7 angle radar enabled (orientation: {args.kld7_orientation})")
+        else:
+            print("K-LD7 not available - running without angle radar")
+
     start_monitor(
         port=args.port,
         mock=args.mock,
@@ -1372,6 +1443,8 @@ def main():
             app, host=args.host, port=args.web_port, debug=False, allow_unsafe_werkzeug=True
         )
     finally:
+        if kld7_tracker:
+            kld7_tracker.stop()
         stop_camera_thread()
         if camera:
             camera.stop()

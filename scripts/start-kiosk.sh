@@ -18,6 +18,9 @@ MODE="rolling-buffer"  # Default: rolling buffer mode (requires one-time radar s
 TRIGGER="sound"  # Default: hardware sound trigger (SEN-14262 → HOST_INT)
 SOUND_PRE_TRIGGER=""
 BUFFER_SPLIT=""
+KLD7=false
+KLD7_PORT=""
+KLD7_ORIENTATION=""
 
 # Buffer split presets (pre/post trigger segments out of 32 total)
 # At 20ksps: each segment = 6.4ms, total buffer = 204.8ms
@@ -72,6 +75,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --sample-rate)
             SAMPLE_RATE="$2"
+            shift 2
+            ;;
+        --kld7)
+            KLD7=true
+            shift
+            ;;
+        --kld7-port)
+            KLD7_PORT="$2"
+            shift 2
+            ;;
+        --kld7-orientation)
+            KLD7_ORIENTATION="$2"
             shift 2
             ;;
         --port|-p)
@@ -173,6 +188,18 @@ fi
 
 if [ -n "$SAMPLE_RATE" ]; then
     SERVER_CMD="$SERVER_CMD --sample-rate $SAMPLE_RATE"
+fi
+
+if [ "$KLD7" = true ]; then
+    SERVER_CMD="$SERVER_CMD --kld7"
+fi
+
+if [ -n "$KLD7_PORT" ]; then
+    SERVER_CMD="$SERVER_CMD --kld7-port $KLD7_PORT"
+fi
+
+if [ -n "$KLD7_ORIENTATION" ]; then
+    SERVER_CMD="$SERVER_CMD --kld7-orientation $KLD7_ORIENTATION"
 fi
 
 # Start Grafana Alloy for log shipping (if installed and credentials configured)
