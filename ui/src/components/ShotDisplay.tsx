@@ -177,15 +177,21 @@ export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
           <MetricCard
             value={hasLaunchAngle ? shot.launch_angle_vertical!.toFixed(1) : '—'}
             unit={hasLaunchAngle ? '°' : undefined}
-            label="Launch Angle"
-            subtext={
-              hasLaunchAngle && shot.launch_angle_horizontal !== null
-                ? `${shot.launch_angle_horizontal > 0 ? '+' : ''}${shot.launch_angle_horizontal.toFixed(1)}° H`
-                : undefined
-            }
+            label="Vertical"
+            subtext={hasLaunchAngle ? (shot.angle_source ?? undefined) : undefined}
             variant="secondary"
             confidence={hasLaunchAngle ? getLaunchAngleQuality(shot.launch_angle_confidence) : null}
           />
+          {shot.launch_angle_horizontal !== null && (
+            <MetricCard
+              value={shot.launch_angle_horizontal.toFixed(1)}
+              unit="°"
+              label="Horizontal"
+              subtext={shot.angle_source ?? undefined}
+              variant="secondary"
+              confidence={getLaunchAngleQuality(shot.launch_angle_confidence)}
+            />
+          )}
           <MetricCard
             value={hasSpin ? formatSpinRpm(shot.spin_rpm!) : '—'}
             unit={hasSpin ? 'rpm' : undefined}

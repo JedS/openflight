@@ -7,10 +7,11 @@ export interface Shot {
   club: string;
   timestamp: string;
   peak_magnitude: number | null;
-  // Camera-based launch angle data
+  // Launch angle data (from K-LD7 radar, camera, or estimation)
   launch_angle_vertical: number | null;
   launch_angle_horizontal: number | null;
   launch_angle_confidence: number | null;
+  angle_source: 'radar' | 'camera' | 'estimated' | null;
   // Rolling buffer mode spin data
   spin_rpm: number | null;
   spin_confidence: number | null;
