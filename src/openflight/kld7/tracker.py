@@ -182,12 +182,27 @@ class KLD7Tracker:
         """Add a frame to the ring buffer."""
         self._ring_buffer.append(frame)
 
+    # Minimum speed (km/h) to consider a detection as a potential ball/club event.
+    # Body movement is typically 1-5 km/h; golf ball/club is >10 km/h.
+    MIN_SPEED_KMH = 10.0
+
+    # Maximum angle spread (degrees) within an event cluster before it's
+    # rejected as noise. Ball passes have tight angle consistency.
+    MAX_ANGLE_SPREAD_DEG = 60.0
+
+    # Maximum event duration (seconds). Ball passes are transient (<0.3s).
+    # Body movement lasts seconds.
+    MAX_EVENT_DURATION_S = 1.0
+
     def get_angle_for_shot(self) -> Optional[KLD7Angle]:
         """
         Search the ring buffer for the ball pass and extract angle data.
 
-        Finds the highest-magnitude detection event in the buffer.
-        Prefers PDAT (raw detections) over TDAT (tracked target).
+        Applies signal processing filters to isolate ball/club events:
+        1. Speed filter: reject detections below MIN_SPEED_KMH
+        2. Event clustering: group detections within 0.5s window
+        3. Angle spread filter: reject clusters with wide angle variation
+        4. Duration filter: reject events lasting longer than MAX_EVENT_DURATION_S
         """
         detections = []
 
@@ -195,19 +210,23 @@ class KLD7Tracker:
             if frame.pdat:
                 for target in frame.pdat:
                     if target is not None and target.get("magnitude", 0) > 0:
-                        detections.append((
-                            frame.timestamp,
-                            target["angle"],
-                            target["distance"],
-                            target["magnitude"],
-                        ))
+                        speed = abs(target.get("speed", 0))
+                        if speed >= self.MIN_SPEED_KMH:
+                            detections.append((
+                                frame.timestamp,
+                                target["angle"],
+                                target["distance"],
+                                target["magnitude"],
+                            ))
             elif frame.tdat and frame.tdat.get("magnitude", 0) > 0:
-                detections.append((
-                    frame.timestamp,
-                    frame.tdat["angle"],
-                    frame.tdat["distance"],
-                    frame.tdat["magnitude"],
-                ))
+                speed = abs(frame.tdat.get("speed", 0))
+                if speed >= self.MIN_SPEED_KMH:
+                    detections.append((
+                        frame.timestamp,
+                        frame.tdat["angle"],
+                        frame.tdat["distance"],
+                        frame.tdat["magnitude"],
+                    ))
 
         if not detections:
             return None
@@ -222,6 +241,18 @@ class KLD7Tracker:
         if not event_detections:
             return None
 
+        # Duration filter: reject events lasting too long
+        timestamps = [d[0] for d in event_detections]
+        event_duration = max(timestamps) - min(timestamps)
+        if event_duration > self.MAX_EVENT_DURATION_S:
+            return None
+
+        # Angle spread filter: reject events with wide angle variation
+        angles = [d[1] for d in event_detections]
+        angle_spread = max(angles) - min(angles)
+        if angle_spread > self.MAX_ANGLE_SPREAD_DEG:
+            return None
+
         total_mag = sum(d[3] for d in event_detections)
         if total_mag == 0:
             return None
@@ -234,7 +265,6 @@ class KLD7Tracker:
         frame_score = min(num_frames / 3.0, 1.0)
         mag_score = min(max_magnitude / 5000.0, 1.0)
 
-        angles = [d[1] for d in event_detections]
         if len(angles) > 1:
             mean_angle = sum(angles) / len(angles)
             angle_std = (sum((a - mean_angle) ** 2 for a in angles) / len(angles)) ** 0.5
