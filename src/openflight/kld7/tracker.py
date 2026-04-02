@@ -210,15 +210,20 @@ class KLD7Tracker:
     # is too uncertain to be useful.
     MIN_CONFIDENCE = 0.4
 
-    def get_angle_for_shot(self) -> Optional[KLD7Angle]:
+    def get_angle_for_shot(self, shot_timestamp: Optional[float] = None) -> Optional[KLD7Angle]:
         """
         Search the ring buffer for the ball pass and extract angle data.
+
+        Args:
+            shot_timestamp: When the OPS243 detected the shot. If provided,
+                events closer to this time are preferred over raw magnitude.
 
         Applies signal processing filters to isolate ball/club events:
         1. Speed filter: reject detections below MIN_SPEED_KMH
         2. Event clustering: group detections within 0.5s window
         3. Angle spread filter: reject clusters with wide angle variation
         4. Duration filter: reject events lasting longer than MAX_EVENT_DURATION_S
+        5. Temporal proximity: prefer events near shot_timestamp when provided
         """
         detections = []
 
@@ -255,7 +260,17 @@ class KLD7Tracker:
         if not detections:
             return None
 
-        peak = max(detections, key=lambda d: d[3])
+        if shot_timestamp is not None:
+            # Score by temporal proximity to shot (0-1) * magnitude.
+            # This prefers high-magnitude events near the shot time.
+            def _score(d):
+                time_diff = abs(d[0] - shot_timestamp)
+                proximity = max(0.0, 1.0 - time_diff / 2.0)
+                return proximity * d[3]
+            peak = max(detections, key=_score)
+        else:
+            peak = max(detections, key=lambda d: d[3])
+
         peak_time = peak[0]
 
         event_detections = [

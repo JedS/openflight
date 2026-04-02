@@ -334,6 +334,38 @@ class TestKLD7NoiseFiltering:
         # Should be close to 12° (ball), not -40° (body)
         assert 10.0 < result.vertical_deg < 14.0
 
+    def test_shot_timestamp_prefers_nearby_event(self):
+        """When shot_timestamp is given, prefer event closest to that time."""
+        tracker = self._make_tracker()
+        now = time.time()
+        # Earlier event: high magnitude at angle 30°
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033,
+                tdat={"distance": 2.0, "speed": 50.0, "angle": 30.0, "magnitude": 6000},
+                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 30.0, "magnitude": 6000}],
+            ))
+        # Gap
+        for i in range(30):
+            tracker._add_frame(KLD7Frame(timestamp=now + 0.5 + i * 0.033, tdat=None, pdat=[]))
+        # Later event: lower magnitude at angle 12° — but closer to shot time
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + 1.5 + i * 0.033,
+                tdat={"distance": 2.0, "speed": 45.0, "angle": 12.0, "magnitude": 4000},
+                pdat=[{"distance": 2.0, "speed": 45.0, "angle": 12.0, "magnitude": 4000}],
+            ))
+
+        # Without timestamp: should pick the higher-magnitude event (30°)
+        result_no_ts = tracker.get_angle_for_shot()
+        assert result_no_ts is not None
+        assert abs(result_no_ts.vertical_deg - 30.0) < 2.0
+
+        # With timestamp near the later event: should pick 12°
+        result_with_ts = tracker.get_angle_for_shot(shot_timestamp=now + 1.55)
+        assert result_with_ts is not None
+        assert abs(result_with_ts.vertical_deg - 12.0) < 2.0
+
     def test_high_confidence_for_multi_frame_consistent_event(self):
         """A 3+ frame event with consistent angle should have high confidence."""
         tracker = self._make_tracker()

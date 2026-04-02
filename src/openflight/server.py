@@ -792,7 +792,9 @@ def on_shot_detected(shot: Shot):
     # Try K-LD7 angle radar first (highest priority for angle data)
     try:
         if kld7_tracker and shot.mode != "mock":
-            kld7_angle = kld7_tracker.get_angle_for_shot()
+            kld7_angle = kld7_tracker.get_angle_for_shot(
+                shot_timestamp=time.time()
+            )
             if kld7_angle:
                 if kld7_angle.vertical_deg is not None:
                     shot.launch_angle_vertical = kld7_angle.vertical_deg
