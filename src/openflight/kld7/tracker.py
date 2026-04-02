@@ -194,6 +194,14 @@ class KLD7Tracker:
     # Body movement lasts seconds.
     MAX_EVENT_DURATION_S = 1.0
 
+    # Minimum magnitude for a detection to be considered real.
+    # Below this, it's likely noise floor artifacts.
+    MIN_MAGNITUDE = 1000
+
+    # Minimum distance (meters) for valid targets. Closer detections are
+    # antenna reflections or near-field artifacts.
+    MIN_DISTANCE_M = 0.3
+
     def get_angle_for_shot(self) -> Optional[KLD7Angle]:
         """
         Search the ring buffer for the ball pass and extract angle data.
@@ -209,23 +217,31 @@ class KLD7Tracker:
         for frame in self._ring_buffer:
             if frame.pdat:
                 for target in frame.pdat:
-                    if target is not None and target.get("magnitude", 0) > 0:
+                    if target is not None:
+                        mag = target.get("magnitude", 0)
                         speed = abs(target.get("speed", 0))
-                        if speed >= self.MIN_SPEED_KMH:
+                        dist = target.get("distance", 0)
+                        if (mag >= self.MIN_MAGNITUDE
+                                and speed >= self.MIN_SPEED_KMH
+                                and dist >= self.MIN_DISTANCE_M):
                             detections.append((
                                 frame.timestamp,
                                 target["angle"],
-                                target["distance"],
-                                target["magnitude"],
+                                dist,
+                                mag,
                             ))
-            elif frame.tdat and frame.tdat.get("magnitude", 0) > 0:
+            elif frame.tdat:
+                mag = frame.tdat.get("magnitude", 0)
                 speed = abs(frame.tdat.get("speed", 0))
-                if speed >= self.MIN_SPEED_KMH:
+                dist = frame.tdat.get("distance", 0)
+                if (mag >= self.MIN_MAGNITUDE
+                        and speed >= self.MIN_SPEED_KMH
+                        and dist >= self.MIN_DISTANCE_M):
                     detections.append((
                         frame.timestamp,
                         frame.tdat["angle"],
-                        frame.tdat["distance"],
-                        frame.tdat["magnitude"],
+                        dist,
+                        mag,
                     ))
 
         if not detections:

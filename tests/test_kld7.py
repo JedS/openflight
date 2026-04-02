@@ -267,6 +267,32 @@ class TestKLD7NoiseFiltering:
         assert result is not None
         assert result.confidence < 0.7, "Single frame should have lower confidence"
 
+    def test_rejects_low_magnitude_detections(self):
+        """Low magnitude detections (below threshold) should be rejected."""
+        tracker = self._make_tracker()
+        now = time.time()
+        # Weak detections — magnitude below minimum threshold
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033,
+                tdat={"distance": 2.0, "speed": 30.0, "angle": 10.0, "magnitude": 500},
+                pdat=[{"distance": 2.0, "speed": 30.0, "angle": 10.0, "magnitude": 500}],
+            ))
+        result = tracker.get_angle_for_shot()
+        assert result is None, "Low magnitude detections should be rejected"
+
+    def test_rejects_very_close_range_reflections(self):
+        """Detections at <0.3m are likely antenna reflections, not real targets."""
+        tracker = self._make_tracker()
+        now = time.time()
+        tracker._add_frame(KLD7Frame(
+            timestamp=now,
+            tdat={"distance": 0.1, "speed": 50.0, "angle": 5.0, "magnitude": 5000},
+            pdat=[{"distance": 0.1, "speed": 50.0, "angle": 5.0, "magnitude": 5000}],
+        ))
+        result = tracker.get_angle_for_shot()
+        assert result is None, "Very close range (<0.3m) should be rejected as reflection"
+
 
 class TestKLD7Integration:
     """Integration tests for K-LD7 angle data flowing through to Shot."""
