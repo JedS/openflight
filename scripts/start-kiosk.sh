@@ -13,7 +13,7 @@ HOST="localhost"
 MOCK_MODE=false
 RADAR_LOG=false
 DEBUG_MODE=false
-NO_CAMERA=false  # Camera auto-enabled by default (uses Hough + ByteTrack)
+NO_CAMERA=true  # Camera disabled by default (K-LD7 radar handles angle)
 # Rolling buffer mode is the only mode (streaming mode removed)
 TRIGGER="sound"  # Default: hardware sound trigger (SEN-14262 → HOST_INT)
 SOUND_PRE_TRIGGER=""
