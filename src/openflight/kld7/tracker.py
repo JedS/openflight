@@ -182,260 +182,249 @@ class KLD7Tracker:
         """Add a frame to the ring buffer."""
         self._ring_buffer.append(frame)
 
-    # Minimum speed (km/h) to consider a detection as a potential ball/club event.
-    # Body movement is typically 1-5 km/h; golf ball/club is >10 km/h.
-    MIN_SPEED_KMH = 10.0
+    # --- Ball detection thresholds ---
+    # Ball appears as fast targets at far range (in flight / hitting net)
+    BALL_MIN_SPEED_KMH = 8.0
+    BALL_MIN_DISTANCE_M = 3.8
+    BALL_MAX_DISTANCE_M = 5.5
+    BALL_MAX_BURST_GAP_S = 0.1  # Max gap between frames in a burst
 
-    # Maximum angle spread (degrees) within an event cluster before it's
-    # rejected as noise. Ball passes have tight angle consistency.
-    MAX_ANGLE_SPREAD_DEG = 60.0
+    # --- Club detection thresholds ---
+    # Club detected by speed transition (slow→fast) at arm's length distance
+    CLUB_MIN_DISTANCE_M = 0.8
+    CLUB_MAX_DISTANCE_M = 2.5
+    CLUB_SPEED_THRESHOLD_KMH = 10.0
 
-    # Maximum event duration (seconds). Ball passes are transient (<0.3s).
-    # Body movement lasts seconds.
-    MAX_EVENT_DURATION_S = 1.0
+    # --- General ---
+    MIN_MAGNITUDE = 500
+    MIN_CONFIDENCE = 0.3
 
-    # Minimum magnitude for a detection to be considered real.
-    # Below this, it's likely noise floor artifacts.
-    MIN_MAGNITUDE = 1000
+    def _extract_ball(self, shot_timestamp=None):
+        """Extract ball launch angle from ring buffer.
 
-    # Minimum distance (meters) for valid targets. Closer detections are
-    # antenna reflections or near-field artifacts.
-    MIN_DISTANCE_M = 0.3
-
-    # Minimum number of frames in an event cluster. Single-frame detections
-    # are often spurious. Real ball passes span at least 2 frames.
-    MIN_EVENT_FRAMES = 2
-
-    # Minimum confidence score to return a result. Below this, the detection
-    # is too uncertain to be useful.
-    MIN_CONFIDENCE = 0.4
-
-    def _collect_detections(self):
-        """Collect all detections from the ring buffer that pass pre-filters."""
-        detections = []
-        for frame in self._ring_buffer:
-            if frame.pdat:
-                for target in frame.pdat:
-                    if target is not None:
-                        mag = target.get("magnitude", 0)
-                        speed = abs(target.get("speed", 0))
-                        dist = target.get("distance", 0)
-                        if (mag >= self.MIN_MAGNITUDE
-                                and speed >= self.MIN_SPEED_KMH
-                                and dist >= self.MIN_DISTANCE_M):
-                            detections.append((
-                                frame.timestamp,
-                                target["angle"],
-                                dist,
-                                mag,
-                            ))
-            elif frame.tdat:
-                mag = frame.tdat.get("magnitude", 0)
-                speed = abs(frame.tdat.get("speed", 0))
-                dist = frame.tdat.get("distance", 0)
-                if (mag >= self.MIN_MAGNITUDE
-                        and speed >= self.MIN_SPEED_KMH
-                        and dist >= self.MIN_DISTANCE_M):
-                    detections.append((
-                        frame.timestamp,
-                        frame.tdat["angle"],
-                        dist,
-                        mag,
-                    ))
-        return detections
-
-    def _extract_event(self, detections, shot_timestamp=None, exclude_times=None):
-        """Find the best event cluster from detections.
-
-        Args:
-            detections: list of (timestamp, angle, distance, magnitude) tuples
-            shot_timestamp: prefer events near this time
-            exclude_times: set of timestamps to skip (for finding secondary events)
-
-        Returns:
-            KLD7Angle or None
+        Ball signature: fast targets (>8 km/h) at far distance (>3.8m)
+        appearing as a 1-3 frame burst. Distance-based, not speed-based,
+        because K-LD7 speed aliases above 100 km/h.
         """
-        available = detections
-        if exclude_times:
-            available = [d for d in detections if d[0] not in exclude_times]
+        # Collect qualifying targets per frame
+        ball_frames = []
+        for frame in self._ring_buffer:
+            targets = []
+            for pt in frame.pdat or []:
+                if (pt is not None
+                        and abs(pt.get("speed", 0)) >= self.BALL_MIN_SPEED_KMH
+                        and self.BALL_MIN_DISTANCE_M <= pt.get("distance", 0) <= self.BALL_MAX_DISTANCE_M
+                        and pt.get("magnitude", 0) >= self.MIN_MAGNITUDE):
+                    targets.append(pt)
+            # Fall back to TDAT if no qualifying PDAT
+            if not targets and frame.tdat:
+                td = frame.tdat
+                if (abs(td.get("speed", 0)) >= self.BALL_MIN_SPEED_KMH
+                        and self.BALL_MIN_DISTANCE_M <= td.get("distance", 0) <= self.BALL_MAX_DISTANCE_M
+                        and td.get("magnitude", 0) >= self.MIN_MAGNITUDE):
+                    targets.append(td)
+            if targets:
+                ball_frames.append((frame.timestamp, targets))
 
-        if not available:
+        if not ball_frames:
+            logger.debug("K-LD7 ball: no far/fast targets in %d buffer frames",
+                          len(self._ring_buffer))
             return None
 
+        # Group into bursts (consecutive frames within BALL_MAX_BURST_GAP_S)
+        bursts = []
+        current_burst = [ball_frames[0]]
+        for i in range(1, len(ball_frames)):
+            if ball_frames[i][0] - ball_frames[i - 1][0] <= self.BALL_MAX_BURST_GAP_S:
+                current_burst.append(ball_frames[i])
+            else:
+                bursts.append(current_burst)
+                current_burst = [ball_frames[i]]
+        bursts.append(current_burst)
+
+        # Pick the best burst — prefer closest to shot_timestamp, else highest magnitude
         if shot_timestamp is not None:
-            def _score(d):
-                time_diff = abs(d[0] - shot_timestamp)
-                proximity = max(0.0, 1.0 - time_diff / 2.0)
-                return proximity * d[3]
-            peak = max(available, key=_score)
+            def burst_score(burst):
+                avg_time = sum(f[0] for f in burst) / len(burst)
+                proximity = max(0.0, 1.0 - abs(avg_time - shot_timestamp) / 2.0)
+                total_mag = sum(t.get("magnitude", 0) for _, targets in burst for t in targets)
+                return proximity * total_mag
+            best_burst = max(bursts, key=burst_score)
         else:
-            peak = max(available, key=lambda d: d[3])
+            def burst_mag(burst):
+                return sum(t.get("magnitude", 0) for _, targets in burst for t in targets)
+            best_burst = max(bursts, key=burst_mag)
 
-        peak_time = peak[0]
-        event_detections = [d for d in available if abs(d[0] - peak_time) < 0.5]
+        # Extract angle from best burst (magnitude-weighted)
+        total_mag = 0
+        weighted_angle = 0.0
+        weighted_dist = 0.0
+        max_magnitude = 0
+        all_angles = []
 
-        if not event_detections:
-            return None
+        for _, targets in best_burst:
+            for t in targets:
+                mag = t.get("magnitude", 0)
+                if mag > 0:
+                    weighted_angle += t["angle"] * mag
+                    weighted_dist += t["distance"] * mag
+                    total_mag += mag
+                    max_magnitude = max(max_magnitude, mag)
+                    all_angles.append(t["angle"])
 
-        # Duration filter
-        timestamps = [d[0] for d in event_detections]
-        event_duration = max(timestamps) - min(timestamps)
-        if event_duration > self.MAX_EVENT_DURATION_S:
-            logger.debug("K-LD7: rejected — event duration %.2fs > %.1fs",
-                          event_duration, self.MAX_EVENT_DURATION_S)
-            return None
-
-        # Angle spread filter
-        angles = [d[1] for d in event_detections]
-        angle_spread = max(angles) - min(angles)
-        if angle_spread > self.MAX_ANGLE_SPREAD_DEG:
-            logger.debug("K-LD7: rejected — angle spread %.1f° > %.1f°",
-                          angle_spread, self.MAX_ANGLE_SPREAD_DEG)
-            return None
-
-        total_mag = sum(d[3] for d in event_detections)
         if total_mag == 0:
             return None
 
-        avg_angle = sum(d[1] * d[3] for d in event_detections) / total_mag
-        avg_distance = sum(d[2] * d[3] for d in event_detections) / total_mag
-        max_magnitude = max(d[3] for d in event_detections)
-        num_frames = len(set(d[0] for d in event_detections))
+        avg_angle = weighted_angle / total_mag
+        avg_distance = weighted_dist / total_mag
+        num_frames = len(best_burst)
 
-        if num_frames < self.MIN_EVENT_FRAMES:
-            logger.debug("K-LD7: rejected — %d frames < min %d",
-                          num_frames, self.MIN_EVENT_FRAMES)
-            return None
-
+        # Confidence: frame count + magnitude + angle consistency
         frame_score = min(num_frames / 3.0, 1.0)
-        mag_score = min(max_magnitude / 5000.0, 1.0)
-
-        if len(angles) > 1:
-            mean_angle = sum(angles) / len(angles)
-            angle_std = (sum((a - mean_angle) ** 2 for a in angles) / len(angles)) ** 0.5
-            consistency_score = max(0.0, 1.0 - angle_std / 20.0)
+        mag_score = min(max_magnitude / 3000.0, 1.0)
+        if len(all_angles) > 1:
+            mean_a = sum(all_angles) / len(all_angles)
+            std_a = (sum((a - mean_a) ** 2 for a in all_angles) / len(all_angles)) ** 0.5
+            consistency = max(0.0, 1.0 - std_a / 30.0)
         else:
-            consistency_score = 0.5
-
-        confidence = frame_score * 0.4 + mag_score * 0.3 + consistency_score * 0.3
-        confidence = round(min(max(confidence, 0.0), 1.0), 2)
+            consistency = 0.5
+        confidence = round(min(max(
+            frame_score * 0.4 + mag_score * 0.3 + consistency * 0.3,
+            0.0), 1.0), 2)
 
         if confidence < self.MIN_CONFIDENCE:
-            logger.debug("K-LD7: rejected — confidence %.2f < %.2f",
+            logger.debug("K-LD7 ball: rejected — confidence %.2f < %.2f",
                           confidence, self.MIN_CONFIDENCE)
             return None
 
-        # Classify: vertical orientation uses angle sign to distinguish ball vs club.
-        # KNOWN LIMITATION: This fails for driver swings where angle of attack
-        # is positive. Needs temporal/magnitude-based classification with more
-        # test data (driver vs iron captures) to build a proper two-event detector.
-        detection_class = None
-        if self.orientation == "vertical":
-            detection_class = "ball" if avg_angle >= 0 else "club"
-
-        logger.info("K-LD7: accepted %s event — angle=%.1f° dist=%.2fm mag=%d "
-                     "frames=%d conf=%.2f",
-                     detection_class or "unknown",
+        logger.info("K-LD7 ball: angle=%.1f° dist=%.2fm mag=%d frames=%d conf=%.2f",
                      avg_angle, avg_distance, max_magnitude, num_frames, confidence)
 
         if self.orientation == "vertical":
             return KLD7Angle(
-                vertical_deg=round(avg_angle, 1),
-                horizontal_deg=None,
-                distance_m=round(avg_distance, 2),
-                magnitude=max_magnitude,
-                confidence=confidence,
-                num_frames=num_frames,
-                detection_class=detection_class,
+                vertical_deg=round(avg_angle, 1), horizontal_deg=None,
+                distance_m=round(avg_distance, 2), magnitude=max_magnitude,
+                confidence=confidence, num_frames=num_frames, detection_class="ball",
             )
-        else:
+        return KLD7Angle(
+            vertical_deg=None, horizontal_deg=round(avg_angle, 1),
+            distance_m=round(avg_distance, 2), magnitude=max_magnitude,
+            confidence=confidence, num_frames=num_frames, detection_class="ball",
+        )
+
+    def _extract_club(self, shot_timestamp=None):
+        """Extract club angle of attack from ring buffer.
+
+        Club signature: speed transition from <10 to >=10 km/h at close
+        range (1-2.5m). The fast PDAT targets at the transition frame
+        are the club head approaching the ball.
+        """
+        frames_list = list(self._ring_buffer)
+        best_transition = None
+        best_score = -1
+
+        for fi in range(1, len(frames_list)):
+            frame = frames_list[fi]
+            prev_frame = frames_list[fi - 1]
+
+            # Get max speed at close range in current and previous frame
+            def _close_range_max_speed(f):
+                max_spd = 0
+                for pt in f.pdat or []:
+                    if pt and self.CLUB_MIN_DISTANCE_M <= pt.get("distance", 0) <= self.CLUB_MAX_DISTANCE_M:
+                        max_spd = max(max_spd, abs(pt.get("speed", 0)))
+                if f.tdat and self.CLUB_MIN_DISTANCE_M <= f.tdat.get("distance", 0) <= self.CLUB_MAX_DISTANCE_M:
+                    max_spd = max(max_spd, abs(f.tdat.get("speed", 0)))
+                return max_spd
+
+            prev_speed = _close_range_max_speed(prev_frame)
+            curr_speed = _close_range_max_speed(frame)
+
+            if curr_speed >= self.CLUB_SPEED_THRESHOLD_KMH and prev_speed < self.CLUB_SPEED_THRESHOLD_KMH:
+                # Speed transition found — collect fast close-range targets
+                fast_targets = []
+                for pt in frame.pdat or []:
+                    if (pt and abs(pt.get("speed", 0)) >= self.CLUB_SPEED_THRESHOLD_KMH
+                            and self.CLUB_MIN_DISTANCE_M <= pt.get("distance", 0) <= self.CLUB_MAX_DISTANCE_M
+                            and pt.get("magnitude", 0) >= self.MIN_MAGNITUDE):
+                        fast_targets.append(pt)
+
+                if not fast_targets and frame.tdat:
+                    td = frame.tdat
+                    if (abs(td.get("speed", 0)) >= self.CLUB_SPEED_THRESHOLD_KMH
+                            and self.CLUB_MIN_DISTANCE_M <= td.get("distance", 0) <= self.CLUB_MAX_DISTANCE_M
+                            and td.get("magnitude", 0) >= self.MIN_MAGNITUDE):
+                        fast_targets.append(td)
+
+                if not fast_targets:
+                    continue
+
+                # Score by proximity to shot_timestamp (if provided) + magnitude
+                total_mag = sum(t.get("magnitude", 0) for t in fast_targets)
+                if shot_timestamp is not None:
+                    proximity = max(0.0, 1.0 - abs(frame.timestamp - shot_timestamp) / 2.0)
+                    score = proximity * total_mag
+                else:
+                    score = total_mag
+
+                if score > best_score:
+                    best_score = score
+                    best_transition = (frame, fast_targets)
+
+        if best_transition is None:
+            logger.debug("K-LD7 club: no speed transition found in %d buffer frames",
+                          len(self._ring_buffer))
+            return None
+
+        frame, fast_targets = best_transition
+
+        # Magnitude-weighted angle
+        total_mag = sum(t.get("magnitude", 0) for t in fast_targets if t.get("magnitude", 0) > 0)
+        if total_mag == 0:
+            return None
+
+        avg_angle = sum(t["angle"] * t["magnitude"] for t in fast_targets if t["magnitude"] > 0) / total_mag
+        avg_dist = sum(t["distance"] for t in fast_targets) / len(fast_targets)
+        max_magnitude = max(t.get("magnitude", 0) for t in fast_targets)
+
+        mag_score = min(max_magnitude / 4000.0, 1.0)
+        n_targets = len(fast_targets)
+        target_score = min(n_targets / 3.0, 1.0)
+        confidence = round(min(max(mag_score * 0.5 + target_score * 0.5, 0.0), 1.0), 2)
+
+        if confidence < self.MIN_CONFIDENCE:
+            logger.debug("K-LD7 club: rejected — confidence %.2f < %.2f",
+                          confidence, self.MIN_CONFIDENCE)
+            return None
+
+        logger.info("K-LD7 club: angle=%.1f° dist=%.2fm mag=%d targets=%d conf=%.2f",
+                     avg_angle, avg_dist, max_magnitude, n_targets, confidence)
+
+        if self.orientation == "vertical":
             return KLD7Angle(
-                vertical_deg=None,
-                horizontal_deg=round(avg_angle, 1),
-                distance_m=round(avg_distance, 2),
-                magnitude=max_magnitude,
-                confidence=confidence,
-                num_frames=num_frames,
-                detection_class=detection_class,
+                vertical_deg=round(avg_angle, 1), horizontal_deg=None,
+                distance_m=round(avg_dist, 2), magnitude=max_magnitude,
+                confidence=confidence, num_frames=1, detection_class="club",
             )
+        return KLD7Angle(
+            vertical_deg=None, horizontal_deg=round(avg_angle, 1),
+            distance_m=round(avg_dist, 2), magnitude=max_magnitude,
+            confidence=confidence, num_frames=1, detection_class="club",
+        )
 
     def get_angle_for_shot(self, shot_timestamp: Optional[float] = None) -> Optional[KLD7Angle]:
+        """Search the ring buffer for the ball launch angle.
+
+        Uses distance-based detection: ball = fast targets at >3.8m.
         """
-        Search the ring buffer for the ball launch angle.
-
-        For vertical orientation, returns only ball events (angle >= 0°).
-        Use get_club_angle() to get the club angle of attack.
-
-        Args:
-            shot_timestamp: When the OPS243 detected the shot. If provided,
-                events closer to this time are preferred over raw magnitude.
-        """
-        detections = self._collect_detections()
-        if not detections:
-            logger.debug("K-LD7: no detections passed pre-filters (speed/mag/dist)")
-            return None
-
-        logger.debug("K-LD7: %d detections passed pre-filters from %d buffer frames",
-                      len(detections), len(self._ring_buffer))
-
-        result = self._extract_event(detections, shot_timestamp)
-        if result is None:
-            return None
-
-        # For vertical orientation, if this event is a club detection,
-        # try to find a ball event instead
-        if self.orientation == "vertical" and result.detection_class == "club":
-            # Exclude the club event timestamps and look for a ball event
-            club_time = None
-            for d in detections:
-                if abs(d[1] - result.vertical_deg) < 1.0:
-                    club_time = d[0]
-                    break
-            exclude = set(
-                d[0] for d in detections
-                if club_time and abs(d[0] - club_time) < 0.5
-            )
-            ball_result = self._extract_event(detections, shot_timestamp, exclude)
-            if ball_result is not None and ball_result.detection_class == "ball":
-                return ball_result
-            # No ball event found — return the club event anyway
-            # (caller can check detection_class)
-            return result
-
-        return result
+        return self._extract_ball(shot_timestamp)
 
     def get_club_angle(self, shot_timestamp: Optional[float] = None) -> Optional[KLD7Angle]:
+        """Search the ring buffer for the club angle of attack.
+
+        Uses speed-transition detection at close range (1-2.5m).
         """
-        Search the ring buffer for the club angle of attack.
-
-        For vertical orientation, returns only club events (angle < 0°).
-
-        Args:
-            shot_timestamp: When the OPS243 detected the shot.
-        """
-        detections = self._collect_detections()
-        if not detections:
-            return None
-
-        # Find all events, looking for a club classification
-        result = self._extract_event(detections, shot_timestamp)
-        if result is None:
-            return None
-
-        if result.detection_class == "club":
-            return result
-
-        # First event was ball — exclude it and look for club
-        exclude = set(
-            d[0] for d in detections
-            if result.vertical_deg is not None
-            and abs(d[1] - result.vertical_deg) < 1.0
-        )
-        club_result = self._extract_event(detections, shot_timestamp, exclude)
-        if club_result is not None and club_result.detection_class == "club":
-            return club_result
-
-        return None
+        return self._extract_club(shot_timestamp)
 
     def snapshot_buffer(self) -> list:
         """Return a serializable snapshot of the current ring buffer.

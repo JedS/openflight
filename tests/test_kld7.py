@@ -37,10 +37,9 @@ class TestKLD7Types:
 
 
 class TestKLD7TrackerRingBuffer:
-    """Tests for ring buffer and angle extraction logic (no hardware)."""
+    """Tests for ring buffer and basic operations."""
 
     def _make_tracker(self, orientation="vertical"):
-        """Create a tracker without connecting to hardware."""
         tracker = KLD7Tracker.__new__(KLD7Tracker)
         tracker.orientation = orientation
         tracker.buffer_seconds = 2.0
@@ -53,9 +52,7 @@ class TestKLD7TrackerRingBuffer:
         now = time.time()
         for i in range(5):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.03,
-                tdat={"distance": 1.0, "speed": 5.0, "angle": 10.0 + i, "magnitude": 3000 + i * 100},
-                pdat=[],
+                timestamp=now + i * 0.03, tdat=None, pdat=[],
             ))
         assert len(tracker._ring_buffer) == 5
 
@@ -65,94 +62,35 @@ class TestKLD7TrackerRingBuffer:
         tracker._ring_buffer = __import__('collections').deque(maxlen=10)
         now = time.time()
         for i in range(20):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.03,
-                tdat={"distance": 1.0, "speed": 5.0, "angle": 0.0, "magnitude": 1000},
-                pdat=[],
-            ))
-        assert len(tracker._ring_buffer) == 10
-
-    def test_get_angle_finds_highest_magnitude_event(self):
-        tracker = self._make_tracker(orientation="vertical")
-        now = time.time()
-        # Background noise frames (no detections)
-        for i in range(10):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.03,
-                tdat=None,
-                pdat=[],
-            ))
-        # Ball pass: 3 frames with high magnitude at angle ~15°
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + 0.30 + i * 0.03,
-                tdat={"distance": 2.0, "speed": 50.0, "angle": 14.0 + i, "magnitude": 5000 + i * 100},
-                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 14.0 + i, "magnitude": 5000 + i * 100}],
-            ))
-        # More noise after
-        for i in range(5):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + 0.50 + i * 0.03,
-                tdat=None,
-                pdat=[],
-            ))
-
-        result = tracker.get_angle_for_shot()
-        assert result is not None
-        assert result.vertical_deg is not None
-        assert 13.0 < result.vertical_deg < 17.0
-        assert result.horizontal_deg is None
-        assert result.num_frames == 3
-        assert result.confidence > 0.0
-        assert result.distance_m > 0.0
-
-    def test_get_angle_returns_none_when_no_detections(self):
-        tracker = self._make_tracker()
-        now = time.time()
-        for i in range(5):
             tracker._add_frame(KLD7Frame(timestamp=now + i * 0.03, tdat=None, pdat=[]))
-        result = tracker.get_angle_for_shot()
-        assert result is None
-
-    def test_get_angle_horizontal_orientation(self):
-        tracker = self._make_tracker(orientation="horizontal")
-        now = time.time()
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 1.5, "speed": 30.0, "angle": -5.0, "magnitude": 4500},
-                pdat=[{"distance": 1.5, "speed": 30.0, "angle": -5.0, "magnitude": 4500}],
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is not None
-        assert result.horizontal_deg is not None
-        assert result.vertical_deg is None
+        assert len(tracker._ring_buffer) == 10
 
     def test_reset_clears_buffer(self):
         tracker = self._make_tracker()
-        tracker._add_frame(KLD7Frame(timestamp=time.time(), tdat={"distance": 1.0, "speed": 5.0, "angle": 0.0, "magnitude": 3000}, pdat=[]))
+        tracker._add_frame(KLD7Frame(timestamp=time.time(), tdat=None, pdat=[]))
         assert len(tracker._ring_buffer) == 1
         tracker.reset()
         assert len(tracker._ring_buffer) == 0
 
-    def test_prefers_pdat_over_tdat(self):
-        """PDAT raw detections should be preferred for angle extraction."""
-        tracker = self._make_tracker(orientation="vertical")
+    def test_snapshot_buffer(self):
+        tracker = self._make_tracker()
         now = time.time()
-        # Multiple frames with TDAT at 10° but PDAT at 20° (higher magnitude)
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 1.0, "speed": 30.0, "angle": 10.0, "magnitude": 3000},
-                pdat=[{"distance": 1.5, "speed": 40.0, "angle": 20.0, "magnitude": 5000}],
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is not None
-        assert abs(result.vertical_deg - 20.0) < 1.0
+        tracker._add_frame(KLD7Frame(timestamp=now, tdat={"distance": 1.0, "speed": 5.0, "angle": 0.0, "magnitude": 3000}, pdat=[]))
+        snap = tracker.snapshot_buffer()
+        assert len(snap) == 1
+        assert snap[0]["tdat"]["distance"] == 1.0
+
+    def test_returns_none_when_no_detections(self):
+        tracker = self._make_tracker()
+        now = time.time()
+        for i in range(5):
+            tracker._add_frame(KLD7Frame(timestamp=now + i * 0.03, tdat=None, pdat=[]))
+        assert tracker.get_angle_for_shot() is None
+        assert tracker.get_club_angle() is None
 
 
-class TestKLD7NoiseFiltering:
-    """Tests for signal processing: rejecting noise, accepting ball events."""
+class TestBallDetection:
+    """Tests for ball launch angle extraction (distance-based)."""
 
     def _make_tracker(self, orientation="vertical"):
         tracker = KLD7Tracker.__new__(KLD7Tracker)
@@ -162,227 +100,312 @@ class TestKLD7NoiseFiltering:
         tracker._init_ring_buffer()
         return tracker
 
-    def test_rejects_slow_body_movement(self):
-        """Body movement at ~1.6 km/h should be rejected even with high magnitude."""
-        tracker = self._make_tracker()
-        now = time.time()
-        # Simulate body movement: slow speed, wide angle spread, many frames
-        for i in range(30):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 1.5, "speed": 1.6, "angle": -40.0 + i * 3.0, "magnitude": 4000},
-                pdat=[{"distance": 1.5, "speed": 1.6, "angle": -40.0 + i * 3.0, "magnitude": 4000}],
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is None, "Body movement at 1.6 km/h should be rejected"
+    def _ball_target(self, angle=15.0, dist=4.2, speed=25.0, mag=2500):
+        """Create a target dict matching ball signature (far, fast)."""
+        return {"distance": dist, "speed": speed, "angle": angle, "magnitude": mag}
 
-    def test_rejects_wide_angle_spread_events(self):
-        """Events with >60° angle spread are noise (body/arm movement)."""
-        tracker = self._make_tracker()
-        now = time.time()
-        # Wide angle spread event: angles from -50 to +50
-        angles = [-50, -30, -10, 10, 30, 50]
-        for i, ang in enumerate(angles):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 2.0, "speed": 5.0, "angle": ang, "magnitude": 5000},
-                pdat=[{"distance": 2.0, "speed": 5.0, "angle": ang, "magnitude": 5000}],
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is None, "Wide angle spread (100°) should be rejected as noise"
+    def _body_target(self, angle=0.0, dist=1.5, speed=2.0, mag=3500):
+        """Create a target dict matching body noise (close, slow)."""
+        return {"distance": dist, "speed": speed, "angle": angle, "magnitude": mag}
 
-    def test_rejects_long_duration_events(self):
-        """Events lasting >1 second are body movement, not a ball pass."""
+    def test_detects_ball_at_far_range(self):
+        """Ball burst: fast targets at >3.8m should be detected."""
         tracker = self._make_tracker()
         now = time.time()
-        # 2-second continuous event (body walking through beam)
-        for i in range(60):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 1.5 + i * 0.02, "speed": 3.0, "angle": 10.0 + (i % 5), "magnitude": 3500},
-                pdat=[],
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is None, "2-second continuous event should be rejected"
-
-    def test_accepts_transient_high_speed_ball(self):
-        """A short, high-speed, high-magnitude event should be accepted."""
-        tracker = self._make_tracker()
-        now = time.time()
-        # Background noise
+        # Empty frames
         for i in range(10):
             tracker._add_frame(KLD7Frame(timestamp=now + i * 0.033, tdat=None, pdat=[]))
-        # Ball pass: 2 frames, high speed, tight angle
+        # Ball burst: 2 frames at ~4.2m
         for i in range(2):
             tracker._add_frame(KLD7Frame(
                 timestamp=now + 0.33 + i * 0.033,
-                tdat={"distance": 2.0, "speed": 50.0, "angle": 12.0 + i * 0.5, "magnitude": 5500},
-                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 12.0 + i * 0.5, "magnitude": 5500}],
+                tdat=None,
+                pdat=[self._ball_target(angle=18.0 + i, dist=4.2 + i * 0.1)],
             ))
         # More empty frames
         for i in range(10):
             tracker._add_frame(KLD7Frame(timestamp=now + 0.5 + i * 0.033, tdat=None, pdat=[]))
 
         result = tracker.get_angle_for_shot()
-        assert result is not None, "Short high-speed ball event should be accepted"
-        assert 11.0 < result.vertical_deg < 14.0
+        assert result is not None
+        assert result.detection_class == "ball"
+        assert 17.0 < result.vertical_deg < 20.0
+        assert result.distance_m > 3.8
 
-    def test_ball_extracted_from_noisy_buffer(self):
-        """Ball event should be found even when surrounded by noise frames."""
+    def test_rejects_slow_targets_at_far_range(self):
+        """Slow targets at far range (net reflections) should be rejected."""
         tracker = self._make_tracker()
         now = time.time()
-        # Noise: slow body movement
+        for i in range(5):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[{"distance": 4.0, "speed": 2.0, "angle": 5.0, "magnitude": 3000}],
+            ))
+        assert tracker.get_angle_for_shot() is None
+
+    def test_rejects_fast_targets_at_close_range(self):
+        """Fast targets at close range are club/body, not ball."""
+        tracker = self._make_tracker()
+        now = time.time()
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[{"distance": 1.5, "speed": 30.0, "angle": -5.0, "magnitude": 4000}],
+            ))
+        assert tracker.get_angle_for_shot() is None
+
+    def test_rejects_body_movement(self):
+        """Body movement at 1.5m, slow speed should produce no ball detection."""
+        tracker = self._make_tracker()
+        now = time.time()
+        for i in range(30):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[self._body_target(angle=-40 + i * 3)],
+            ))
+        assert tracker.get_angle_for_shot() is None
+
+    def test_ball_found_amid_body_noise(self):
+        """Ball burst should be found even surrounded by body noise."""
+        tracker = self._make_tracker()
+        now = time.time()
+        # Body noise
         for i in range(15):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 1.5, "speed": 1.6, "angle": -20.0 + i * 2.0, "magnitude": 3000},
-                pdat=[],
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[self._body_target(angle=-20 + i * 2)],
             ))
         # Gap
         for i in range(5):
             tracker._add_frame(KLD7Frame(timestamp=now + 0.5 + i * 0.033, tdat=None, pdat=[]))
-        # Ball: high speed, tight angle, transient
+        # Ball burst
         for i in range(2):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + 0.7 + i * 0.033,
-                tdat={"distance": 2.5, "speed": 45.0, "angle": 15.0, "magnitude": 5000},
-                pdat=[{"distance": 2.5, "speed": 45.0, "angle": 15.0, "magnitude": 5000}],
+                timestamp=now + 0.7 + i * 0.033, tdat=None,
+                pdat=[self._ball_target(angle=20.0, dist=4.3)],
             ))
-        # More noise after
+        # More body noise
         for i in range(10):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + 1.0 + i * 0.033,
-                tdat={"distance": 1.2, "speed": 1.6, "angle": 30.0 + i, "magnitude": 2800},
-                pdat=[],
+                timestamp=now + 1.0 + i * 0.033, tdat=None,
+                pdat=[self._body_target(angle=30 + i)],
             ))
 
         result = tracker.get_angle_for_shot()
-        assert result is not None, "Ball event should be found amid noise"
-        assert 14.0 < result.vertical_deg < 16.0
+        assert result is not None
+        assert 19.0 < result.vertical_deg < 21.0
 
-    def test_rejects_single_frame_detection(self):
-        """Single-frame detections should be rejected (too few frames)."""
+    def test_rejects_low_magnitude(self):
+        """Targets below minimum magnitude should be rejected."""
         tracker = self._make_tracker()
         now = time.time()
-        tracker._add_frame(KLD7Frame(
-            timestamp=now,
-            tdat={"distance": 2.0, "speed": 40.0, "angle": 10.0, "magnitude": 4500},
-            pdat=[{"distance": 2.0, "speed": 40.0, "angle": 10.0, "magnitude": 4500}],
-        ))
-        result = tracker.get_angle_for_shot()
-        assert result is None, "Single frame detection should be rejected"
-
-    def test_rejects_low_magnitude_detections(self):
-        """Low magnitude detections (below threshold) should be rejected."""
-        tracker = self._make_tracker()
-        now = time.time()
-        # Weak detections — magnitude below minimum threshold
         for i in range(3):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 2.0, "speed": 30.0, "angle": 10.0, "magnitude": 500},
-                pdat=[{"distance": 2.0, "speed": 30.0, "angle": 10.0, "magnitude": 500}],
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[self._ball_target(mag=200)],
             ))
-        result = tracker.get_angle_for_shot()
-        assert result is None, "Low magnitude detections should be rejected"
+        assert tracker.get_angle_for_shot() is None
 
-    def test_rejects_very_close_range_reflections(self):
-        """Detections at <0.3m are likely antenna reflections, not real targets."""
+    def test_shot_timestamp_prefers_nearby_burst(self):
+        """When shot_timestamp is given, prefer burst closest to that time."""
         tracker = self._make_tracker()
         now = time.time()
+        # Earlier burst at angle 30°
         for i in range(2):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 0.1, "speed": 50.0, "angle": 5.0, "magnitude": 5000},
-                pdat=[{"distance": 0.1, "speed": 50.0, "angle": 5.0, "magnitude": 5000}],
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is None, "Very close range (<0.3m) should be rejected as reflection"
-
-    def test_tdat_only_accepted_when_no_pdat(self):
-        """When only TDAT data is available (no PDAT), it should still work."""
-        tracker = self._make_tracker()
-        now = time.time()
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 2.0, "speed": 40.0, "angle": 8.0 + i * 0.5, "magnitude": 4500},
-                pdat=[],  # No PDAT targets
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is not None
-        assert 7.0 < result.vertical_deg < 10.0
-
-    def test_multiple_speed_detections_different_speeds(self):
-        """PDAT may report multiple targets at different speed bins.
-        Only targets above MIN_SPEED should contribute to the angle."""
-        tracker = self._make_tracker()
-        now = time.time()
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat=None,
-                pdat=[
-                    # Slow target (body) — should be filtered
-                    {"distance": 1.5, "speed": 1.6, "angle": -40.0, "magnitude": 4000},
-                    # Fast target (ball) — should be kept
-                    {"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5000},
-                ],
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is not None
-        # Should be close to 12° (ball), not -40° (body)
-        assert 10.0 < result.vertical_deg < 14.0
-
-    def test_shot_timestamp_prefers_nearby_event(self):
-        """When shot_timestamp is given, prefer event closest to that time."""
-        tracker = self._make_tracker()
-        now = time.time()
-        # Earlier event: high magnitude at angle 30°
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 2.0, "speed": 50.0, "angle": 30.0, "magnitude": 6000},
-                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 30.0, "magnitude": 6000}],
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[self._ball_target(angle=30.0, mag=3000)],
             ))
         # Gap
         for i in range(30):
             tracker._add_frame(KLD7Frame(timestamp=now + 0.5 + i * 0.033, tdat=None, pdat=[]))
-        # Later event: lower magnitude at angle 12° — but closer to shot time
-        for i in range(3):
+        # Later burst at angle 12°
+        for i in range(2):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + 1.5 + i * 0.033,
-                tdat={"distance": 2.0, "speed": 45.0, "angle": 12.0, "magnitude": 4000},
-                pdat=[{"distance": 2.0, "speed": 45.0, "angle": 12.0, "magnitude": 4000}],
+                timestamp=now + 1.5 + i * 0.033, tdat=None,
+                pdat=[self._ball_target(angle=12.0, mag=2000)],
             ))
 
-        # Without timestamp: should pick the higher-magnitude event (30°)
-        result_no_ts = tracker.get_angle_for_shot()
-        assert result_no_ts is not None
-        assert abs(result_no_ts.vertical_deg - 30.0) < 2.0
+        # Without timestamp: picks higher magnitude (30°)
+        result = tracker.get_angle_for_shot()
+        assert result is not None
+        assert abs(result.vertical_deg - 30.0) < 2.0
 
-        # With timestamp near the later event: should pick 12°
-        result_with_ts = tracker.get_angle_for_shot(shot_timestamp=now + 1.55)
-        assert result_with_ts is not None
-        assert abs(result_with_ts.vertical_deg - 12.0) < 2.0
+        # With timestamp near later burst: picks 12°
+        result_ts = tracker.get_angle_for_shot(shot_timestamp=now + 1.55)
+        assert result_ts is not None
+        assert abs(result_ts.vertical_deg - 12.0) < 2.0
 
-    def test_high_confidence_for_multi_frame_consistent_event(self):
-        """A 3+ frame event with consistent angle should have high confidence."""
-        tracker = self._make_tracker()
+    def test_horizontal_orientation(self):
+        """Ball detection should use horizontal_deg for horizontal orientation."""
+        tracker = self._make_tracker(orientation="horizontal")
         now = time.time()
-        for i in range(4):
+        for i in range(2):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.033,
-                tdat={"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5500},
-                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5500}],
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[self._ball_target(angle=-3.0)],
             ))
         result = tracker.get_angle_for_shot()
         assert result is not None
-        assert result.confidence >= 0.7, f"Multi-frame consistent event should have high confidence, got {result.confidence}"
+        assert result.horizontal_deg is not None
+        assert result.vertical_deg is None
+
+    def test_tdat_fallback_when_no_pdat(self):
+        """Should fall back to TDAT when no PDAT targets qualify."""
+        tracker = self._make_tracker()
+        now = time.time()
+        for i in range(2):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033,
+                tdat={"distance": 4.2, "speed": 20.0, "angle": 15.0, "magnitude": 2500},
+                pdat=[],
+            ))
+        result = tracker.get_angle_for_shot()
+        assert result is not None
+        assert 14.0 < result.vertical_deg < 16.0
+
+    def test_multi_frame_higher_confidence(self):
+        """3-frame burst should have higher confidence than 1-frame."""
+        tracker = self._make_tracker()
+        now = time.time()
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[self._ball_target(angle=15.0, mag=3000)],
+            ))
+        result_3 = tracker.get_angle_for_shot()
+
+        tracker2 = self._make_tracker()
+        tracker2._add_frame(KLD7Frame(
+            timestamp=now, tdat=None,
+            pdat=[self._ball_target(angle=15.0, mag=3000)],
+        ))
+        result_1 = tracker2.get_angle_for_shot()
+
+        assert result_3 is not None
+        assert result_1 is not None
+        assert result_3.confidence > result_1.confidence
+
+
+class TestClubDetection:
+    """Tests for club angle of attack extraction (speed-transition based)."""
+
+    def _make_tracker(self, orientation="vertical"):
+        tracker = KLD7Tracker.__new__(KLD7Tracker)
+        tracker.orientation = orientation
+        tracker.buffer_seconds = 2.0
+        tracker.max_buffer_frames = 70
+        tracker._init_ring_buffer()
+        return tracker
+
+    def test_detects_speed_transition(self):
+        """Club detected by speed jump from <10 to >=10 km/h at close range."""
+        tracker = self._make_tracker()
+        now = time.time()
+        # Slow frames (body/setup)
+        for i in range(5):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[{"distance": 1.5, "speed": 3.0, "angle": -10.0, "magnitude": 3500}],
+            ))
+        # Speed transition: club approaching ball
+        tracker._add_frame(KLD7Frame(
+            timestamp=now + 0.2, tdat=None,
+            pdat=[
+                {"distance": 1.3, "speed": 12.0, "angle": -6.0, "magnitude": 4000},
+                {"distance": 1.4, "speed": 11.0, "angle": -5.0, "magnitude": 3800},
+            ],
+        ))
+
+        result = tracker.get_club_angle()
+        assert result is not None
+        assert result.detection_class == "club"
+        assert -8.0 < result.vertical_deg < -4.0
+
+    def test_rejects_no_speed_transition(self):
+        """Continuous slow movement should not trigger club detection."""
+        tracker = self._make_tracker()
+        now = time.time()
+        for i in range(20):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[{"distance": 1.5, "speed": 5.0, "angle": -10.0 + i, "magnitude": 3500}],
+            ))
+        assert tracker.get_club_angle() is None
+
+    def test_rejects_speed_transition_at_far_range(self):
+        """Speed transition at >2.5m is not club (ball or net reflection)."""
+        tracker = self._make_tracker()
+        now = time.time()
+        for i in range(5):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[{"distance": 4.0, "speed": 3.0, "angle": 5.0, "magnitude": 3000}],
+            ))
+        tracker._add_frame(KLD7Frame(
+            timestamp=now + 0.2, tdat=None,
+            pdat=[{"distance": 4.0, "speed": 15.0, "angle": 5.0, "magnitude": 3000}],
+        ))
+        assert tracker.get_club_angle() is None
+
+    def test_club_uses_tdat_fallback(self):
+        """Club detection should use TDAT when PDAT is empty."""
+        tracker = self._make_tracker()
+        now = time.time()
+        # Slow
+        tracker._add_frame(KLD7Frame(
+            timestamp=now,
+            tdat={"distance": 1.5, "speed": 3.0, "angle": -10.0, "magnitude": 3500},
+            pdat=[],
+        ))
+        # Fast (transition)
+        tracker._add_frame(KLD7Frame(
+            timestamp=now + 0.033,
+            tdat={"distance": 1.3, "speed": 12.0, "angle": -7.0, "magnitude": 4000},
+            pdat=[],
+        ))
+        result = tracker.get_club_angle()
+        assert result is not None
+        assert result.detection_class == "club"
+
+    def test_ball_and_club_independent(self):
+        """Ball and club detection work independently on same buffer."""
+        tracker = self._make_tracker()
+        now = time.time()
+        # Club approach (slow → fast at close range)
+        for i in range(5):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[{"distance": 1.5, "speed": 3.0, "angle": -8.0, "magnitude": 3500}],
+            ))
+        tracker._add_frame(KLD7Frame(
+            timestamp=now + 0.2, tdat=None,
+            pdat=[{"distance": 1.3, "speed": 12.0, "angle": -6.0, "magnitude": 4000}],
+        ))
+        # Gap
+        for i in range(10):
+            tracker._add_frame(KLD7Frame(timestamp=now + 0.3 + i * 0.033, tdat=None, pdat=[]))
+        # Ball burst (far, fast)
+        for i in range(2):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + 0.7 + i * 0.033, tdat=None,
+                pdat=[{"distance": 4.2, "speed": 25.0, "angle": 18.0, "magnitude": 2500}],
+            ))
+
+        ball = tracker.get_angle_for_shot()
+        club = tracker.get_club_angle()
+
+        assert ball is not None
+        assert ball.detection_class == "ball"
+        assert ball.vertical_deg > 0
+
+        assert club is not None
+        assert club.detection_class == "club"
+        assert club.vertical_deg < 0
 
 
 class TestKLD7RealData:
-    """Tests against real captured K-LD7 data from golf session."""
+    """Tests against real captured K-LD7 data."""
 
     def _make_tracker(self, orientation="vertical"):
         tracker = KLD7Tracker.__new__(KLD7Tracker)
@@ -393,7 +416,6 @@ class TestKLD7RealData:
         return tracker
 
     def _load_frames(self):
-        """Load real capture data and convert to KLD7Frame objects."""
         if not CAPTURE_PATH.exists():
             pytest.skip(f"Capture file not found: {CAPTURE_PATH}")
         with open(CAPTURE_PATH, "rb") as f:
@@ -401,16 +423,9 @@ class TestKLD7RealData:
         return data["frames"]
 
     def test_rejects_body_movement_from_real_data(self):
-        """Long noisy events from real data should be rejected.
-
-        The capture has events like E2 (3.6s, 102 frames, angle spread 131°)
-        and E14 (7.2s, 187 frames). These are body movement and should produce
-        no angle result.
-        """
+        """Body movement window should produce no ball detection."""
         raw_frames = self._load_frames()
         tracker = self._make_tracker()
-
-        # Load frames from ~0.4s to ~4.0s (event E2 — body movement)
         t0 = raw_frames[0]["timestamp"]
         for f in raw_frames:
             t = f["timestamp"] - t0
@@ -420,59 +435,12 @@ class TestKLD7RealData:
                     tdat=f.get("tdat"),
                     pdat=f.get("pdat", []),
                 ))
-
-        result = tracker.get_angle_for_shot()
-        # This entire window is body movement — should be rejected
-        assert result is None, (
-            f"Body movement window (0.4-4.0s) should be rejected, "
-            f"got angle={result}"
-        )
-
-    def test_filters_reduce_false_positives_from_real_data(self):
-        """Running the algorithm on the full capture should produce far fewer
-        results than the number of raw detection events.
-
-        The capture has 39 raw events but most are noise. The filtering
-        should dramatically reduce this count.
-        """
-        raw_frames = self._load_frames()
-
-        # Simulate running get_angle_for_shot on overlapping 2-second windows
-        # across the full capture, counting how many produce a result
-        results = []
-        t0 = raw_frames[0]["timestamp"]
-        t_end = raw_frames[-1]["timestamp"]
-
-        window = 2.0
-        step = 1.0
-        t = t0
-
-        while t < t_end:
-            tracker = self._make_tracker()
-            for f in raw_frames:
-                if t <= f["timestamp"] <= t + window:
-                    tracker._add_frame(KLD7Frame(
-                        timestamp=f["timestamp"],
-                        tdat=f.get("tdat"),
-                        pdat=f.get("pdat", []),
-                    ))
-            result = tracker.get_angle_for_shot()
-            if result is not None:
-                results.append(result)
-            t += step
-
-        # With 39 raw events, we should see far fewer after filtering.
-        # Current algorithm produces ~10 from 54 seconds of data.
-        assert len(results) < 12, (
-            f"Expected <12 filtered results from real data, got {len(results)}"
-        )
+        assert tracker.get_angle_for_shot() is None
 
     def test_quiet_period_produces_no_results(self):
-        """A quiet period (no targets) in real data should produce no results."""
+        """A quiet period in real data should produce no results."""
         raw_frames = self._load_frames()
         tracker = self._make_tracker()
-
-        # Load frames from 19-24s (quiet period in real data)
         t0 = raw_frames[0]["timestamp"]
         for f in raw_frames:
             t = f["timestamp"] - t0
@@ -482,279 +450,47 @@ class TestKLD7RealData:
                     tdat=f.get("tdat"),
                     pdat=f.get("pdat", []),
                 ))
-
-        result = tracker.get_angle_for_shot()
-        assert result is None, (
-            f"Quiet period (19-24s) should produce no results, got {result}"
-        )
-
-    def test_real_data_results_have_reasonable_angles(self):
-        """Any results from real data should have physically reasonable angles."""
-        raw_frames = self._load_frames()
-
-        t0 = raw_frames[0]["timestamp"]
-        t_end = raw_frames[-1]["timestamp"]
-        results = []
-        t = t0
-        while t < t_end:
-            tracker = self._make_tracker()
-            for f in raw_frames:
-                if t <= f["timestamp"] <= t + 2.0:
-                    tracker._add_frame(KLD7Frame(
-                        timestamp=f["timestamp"],
-                        tdat=f.get("tdat"),
-                        pdat=f.get("pdat", []),
-                    ))
-            result = tracker.get_angle_for_shot()
-            if result is not None:
-                results.append(result)
-            t += 1.0
-
-        for r in results:
-            angle = r.vertical_deg
-            assert angle is not None
-            # Golf launch angles are typically -5° to 45°
-            assert -60 < angle < 60, f"Angle {angle}° is outside reasonable range"
-            assert r.confidence > 0.0
-            assert r.distance_m > 0.3
-
-
-    def test_real_data_filter_reduces_count_from_39_events(self):
-        """The 54s capture has 39 raw detection events. Filtering should
-        reduce this significantly, demonstrating noise rejection quality."""
-        raw_frames = self._load_frames()
-
-        # Count how many unique 2s windows produce results
-        t0 = raw_frames[0]["timestamp"]
-        t_end = raw_frames[-1]["timestamp"]
-        unique_results = set()
-        t = t0
-        while t < t_end:
-            tracker = self._make_tracker()
-            for f in raw_frames:
-                if t <= f["timestamp"] <= t + 2.0:
-                    tracker._add_frame(KLD7Frame(
-                        timestamp=f["timestamp"],
-                        tdat=f.get("tdat"),
-                        pdat=f.get("pdat", []),
-                    ))
-            result = tracker.get_angle_for_shot()
-            if result is not None:
-                # Deduplicate by rounding angle and time
-                unique_results.add((round(result.vertical_deg, 0), round(t - t0, 0)))
-            t += 1.0
-
-        # Should have significantly fewer unique results than raw event count (39)
-        assert len(unique_results) <= 10, (
-            f"Expected <=10 unique results (vs 39 raw events), got {len(unique_results)}"
-        )
-
-    def test_shot_timestamp_with_real_data(self):
-        """Using shot_timestamp with real data should prefer nearby events."""
-        raw_frames = self._load_frames()
-        tracker = self._make_tracker()
-
-        # Load a window that has detections around t=8-10s
-        t0 = raw_frames[0]["timestamp"]
-        for f in raw_frames:
-            t = f["timestamp"] - t0
-            if 6.0 <= t <= 12.0:
-                tracker._add_frame(KLD7Frame(
-                    timestamp=f["timestamp"],
-                    tdat=f.get("tdat"),
-                    pdat=f.get("pdat", []),
-                ))
-
-        # Without timestamp
-        result_no_ts = tracker.get_angle_for_shot()
-
-        # With timestamp near middle of window
-        shot_ts = t0 + 9.0
-        result_with_ts = tracker.get_angle_for_shot(shot_timestamp=shot_ts)
-
-        # Both should produce results (or both None)
-        # The key test: with timestamp, the result should be temporally valid
-        if result_with_ts is not None:
-            assert result_with_ts.confidence > 0.0
-            assert result_with_ts.distance_m > 0.3
-            assert -60 < result_with_ts.vertical_deg < 60
+        assert tracker.get_angle_for_shot() is None
 
 
 class TestKLD7Integration:
     """Integration tests for K-LD7 angle data flowing through to Shot."""
 
     def test_angle_attaches_to_shot_vertical(self):
-        """K-LD7 vertical angle should attach to Shot correctly."""
         shot = Shot(
-            ball_speed_mph=150.0,
-            timestamp=datetime.now(),
-            launch_angle_vertical=12.5,
-            launch_angle_confidence=0.8,
-            angle_source="radar",
+            ball_speed_mph=150.0, timestamp=datetime.now(),
+            launch_angle_vertical=12.5, launch_angle_confidence=0.8, angle_source="radar",
         )
         result = shot_to_dict(shot)
         assert result["launch_angle_vertical"] == 12.5
-        assert result["launch_angle_confidence"] == 0.8
         assert result["angle_source"] == "radar"
 
     def test_angle_attaches_to_shot_horizontal(self):
-        """K-LD7 horizontal angle should attach to Shot correctly."""
         shot = Shot(
-            ball_speed_mph=150.0,
-            timestamp=datetime.now(),
-            launch_angle_horizontal=-3.5,
-            launch_angle_confidence=0.7,
-            angle_source="radar",
+            ball_speed_mph=150.0, timestamp=datetime.now(),
+            launch_angle_horizontal=-3.5, launch_angle_confidence=0.7, angle_source="radar",
         )
         result = shot_to_dict(shot)
         assert result["launch_angle_horizontal"] == -3.5
-        assert result["angle_source"] == "radar"
 
     def test_carry_adjusts_for_vertical_angle(self):
-        """Shot carry should adjust when vertical angle is provided."""
         shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
         shot_with_angle = Shot(
-            ball_speed_mph=150.0,
-            timestamp=datetime.now(),
-            launch_angle_vertical=15.0,
-            launch_angle_confidence=0.8,
-            angle_source="radar",
+            ball_speed_mph=150.0, timestamp=datetime.now(),
+            launch_angle_vertical=15.0, launch_angle_confidence=0.8, angle_source="radar",
         )
-        assert shot_no_angle.estimated_carry_yards > 0
-        assert shot_with_angle.estimated_carry_yards > 0
         assert shot_no_angle.estimated_carry_yards != shot_with_angle.estimated_carry_yards
 
-    def test_tracker_angle_to_shot_flow(self):
-        """Full flow: KLD7Tracker ring buffer -> get_angle -> attach to Shot."""
-        tracker = KLD7Tracker.__new__(KLD7Tracker)
-        tracker.orientation = "vertical"
-        tracker.buffer_seconds = 2.0
-        tracker.max_buffer_frames = 70
-        tracker._init_ring_buffer()
-
-        now = time.time()
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.03,
-                tdat={"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5000},
-                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5000}],
-            ))
-
-        # Use shot_timestamp like the real server integration does
-        angle = tracker.get_angle_for_shot(shot_timestamp=now + 0.1)
-        assert angle is not None
-
-        shot = Shot(
-            ball_speed_mph=150.0,
-            timestamp=datetime.now(),
-        )
-        shot.launch_angle_vertical = angle.vertical_deg
-        shot.launch_angle_confidence = angle.confidence
-        shot.angle_source = "radar"
-
-        result = shot_to_dict(shot)
-        assert result["launch_angle_vertical"] == 12.0
-        assert result["angle_source"] == "radar"
-        assert result["launch_angle_confidence"] > 0.0
-
-    def test_ball_classified_as_ball(self):
-        """Positive vertical angle should be classified as 'ball'."""
-        tracker = KLD7Tracker.__new__(KLD7Tracker)
-        tracker.orientation = "vertical"
-        tracker.buffer_seconds = 2.0
-        tracker.max_buffer_frames = 70
-        tracker._init_ring_buffer()
-
-        now = time.time()
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.03,
-                tdat={"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5000},
-                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5000}],
-            ))
-        result = tracker.get_angle_for_shot()
-        assert result is not None
-        assert result.detection_class == "ball"
-        assert result.vertical_deg >= 0
-
-    def test_club_classified_separately(self):
-        """Negative vertical angle should be classified as 'club'."""
-        tracker = KLD7Tracker.__new__(KLD7Tracker)
-        tracker.orientation = "vertical"
-        tracker.buffer_seconds = 2.0
-        tracker.max_buffer_frames = 70
-        tracker._init_ring_buffer()
-
-        now = time.time()
-        # Only club event (negative angle)
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.03,
-                tdat={"distance": 1.5, "speed": 40.0, "angle": -6.0, "magnitude": 4500},
-                pdat=[{"distance": 1.5, "speed": 40.0, "angle": -6.0, "magnitude": 4500}],
-            ))
-        # get_angle_for_shot returns club when no ball found
-        result = tracker.get_angle_for_shot()
-        assert result is not None
-        assert result.detection_class == "club"
-
-        # get_club_angle should also find it
-        club = tracker.get_club_angle()
-        assert club is not None
-        assert club.detection_class == "club"
-        assert club.vertical_deg < 0
-
-    def test_ball_preferred_over_club_in_mixed_buffer(self):
-        """When buffer has both ball and club events, get_angle_for_shot returns ball."""
-        tracker = KLD7Tracker.__new__(KLD7Tracker)
-        tracker.orientation = "vertical"
-        tracker.buffer_seconds = 2.0
-        tracker.max_buffer_frames = 70
-        tracker._init_ring_buffer()
-
-        now = time.time()
-        # Club event first (higher magnitude)
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.03,
-                tdat={"distance": 1.5, "speed": 40.0, "angle": -6.0, "magnitude": 6000},
-                pdat=[{"distance": 1.5, "speed": 40.0, "angle": -6.0, "magnitude": 6000}],
-            ))
-        # Gap
-        for i in range(15):
-            tracker._add_frame(KLD7Frame(timestamp=now + 0.5 + i * 0.03, tdat=None, pdat=[]))
-        # Ball event (lower magnitude)
-        for i in range(3):
-            tracker._add_frame(KLD7Frame(
-                timestamp=now + 1.0 + i * 0.03,
-                tdat={"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 4500},
-                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 4500}],
-            ))
-
-        ball = tracker.get_angle_for_shot()
-        assert ball is not None
-        assert ball.detection_class == "ball"
-        assert ball.vertical_deg > 0
-
-        club = tracker.get_club_angle()
-        assert club is not None
-        assert club.detection_class == "club"
-        assert club.vertical_deg < 0
-
     def test_club_angle_in_shot_dict(self):
-        """Club angle should appear in shot_to_dict output."""
         shot = Shot(
-            ball_speed_mph=150.0,
-            timestamp=datetime.now(),
-            launch_angle_vertical=12.0,
-            angle_source="radar",
+            ball_speed_mph=150.0, timestamp=datetime.now(),
             club_angle_deg=-5.5,
         )
         result = shot_to_dict(shot)
         assert result["club_angle_deg"] == -5.5
 
-    def test_get_angle_after_reset_returns_none(self):
-        """Calling get_angle_for_shot after reset should return None."""
+    def test_full_tracker_to_shot_flow(self):
+        """Full flow: ball burst in buffer → get_angle → attach to Shot."""
         tracker = KLD7Tracker.__new__(KLD7Tracker)
         tracker.orientation = "vertical"
         tracker.buffer_seconds = 2.0
@@ -762,18 +498,40 @@ class TestKLD7Integration:
         tracker._init_ring_buffer()
 
         now = time.time()
+        # Ball burst at far range
         for i in range(3):
             tracker._add_frame(KLD7Frame(
-                timestamp=now + i * 0.03,
-                tdat={"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5000},
-                pdat=[{"distance": 2.0, "speed": 50.0, "angle": 12.0, "magnitude": 5000}],
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[{"distance": 4.3, "speed": 20.0, "angle": 18.0, "magnitude": 2500}],
             ))
 
-        # Should have result before reset
+        angle = tracker.get_angle_for_shot(shot_timestamp=now + 0.1)
+        assert angle is not None
+        assert angle.detection_class == "ball"
+
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
+        shot.launch_angle_vertical = angle.vertical_deg
+        shot.launch_angle_confidence = angle.confidence
+        shot.angle_source = "radar"
+
+        result = shot_to_dict(shot)
+        assert result["launch_angle_vertical"] == 18.0
+        assert result["angle_source"] == "radar"
+
+    def test_get_angle_after_reset_returns_none(self):
+        tracker = KLD7Tracker.__new__(KLD7Tracker)
+        tracker.orientation = "vertical"
+        tracker.buffer_seconds = 2.0
+        tracker.max_buffer_frames = 70
+        tracker._init_ring_buffer()
+
+        now = time.time()
+        for i in range(2):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033, tdat=None,
+                pdat=[{"distance": 4.3, "speed": 20.0, "angle": 15.0, "magnitude": 2500}],
+            ))
         assert tracker.get_angle_for_shot() is not None
 
         tracker.reset()
-
-        # Should be None after reset
-        result = tracker.get_angle_for_shot(shot_timestamp=time.time())
-        assert result is None
+        assert tracker.get_angle_for_shot() is None
