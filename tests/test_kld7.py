@@ -117,11 +117,12 @@ class TestKLD7TrackerRingBuffer:
     def test_get_angle_horizontal_orientation(self):
         tracker = self._make_tracker(orientation="horizontal")
         now = time.time()
-        tracker._add_frame(KLD7Frame(
-            timestamp=now,
-            tdat={"distance": 1.5, "speed": 30.0, "angle": -5.0, "magnitude": 4500},
-            pdat=[{"distance": 1.5, "speed": 30.0, "angle": -5.0, "magnitude": 4500}],
-        ))
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033,
+                tdat={"distance": 1.5, "speed": 30.0, "angle": -5.0, "magnitude": 4500},
+                pdat=[{"distance": 1.5, "speed": 30.0, "angle": -5.0, "magnitude": 4500}],
+            ))
         result = tracker.get_angle_for_shot()
         assert result is not None
         assert result.horizontal_deg is not None
@@ -138,13 +139,13 @@ class TestKLD7TrackerRingBuffer:
         """PDAT raw detections should be preferred for angle extraction."""
         tracker = self._make_tracker(orientation="vertical")
         now = time.time()
-        # Frame with TDAT at 10° but PDAT at 20° (higher magnitude)
-        # Both speeds above MIN_SPEED_KMH (10 km/h) to pass speed filter
-        tracker._add_frame(KLD7Frame(
-            timestamp=now,
-            tdat={"distance": 1.0, "speed": 30.0, "angle": 10.0, "magnitude": 3000},
-            pdat=[{"distance": 1.5, "speed": 40.0, "angle": 20.0, "magnitude": 5000}],
-        ))
+        # Multiple frames with TDAT at 10° but PDAT at 20° (higher magnitude)
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033,
+                tdat={"distance": 1.0, "speed": 30.0, "angle": 10.0, "magnitude": 3000},
+                pdat=[{"distance": 1.5, "speed": 40.0, "angle": 20.0, "magnitude": 5000}],
+            ))
         result = tracker.get_angle_for_shot()
         assert result is not None
         assert abs(result.vertical_deg - 20.0) < 1.0
@@ -259,8 +260,8 @@ class TestKLD7NoiseFiltering:
         assert result is not None, "Ball event should be found amid noise"
         assert 14.0 < result.vertical_deg < 16.0
 
-    def test_confidence_low_for_single_frame_detection(self):
-        """Single-frame detections should have lower confidence."""
+    def test_rejects_single_frame_detection(self):
+        """Single-frame detections should be rejected (too few frames)."""
         tracker = self._make_tracker()
         now = time.time()
         tracker._add_frame(KLD7Frame(
@@ -269,8 +270,7 @@ class TestKLD7NoiseFiltering:
             pdat=[{"distance": 2.0, "speed": 40.0, "angle": 10.0, "magnitude": 4500}],
         ))
         result = tracker.get_angle_for_shot()
-        assert result is not None
-        assert result.confidence < 0.7, "Single frame should have lower confidence"
+        assert result is None, "Single frame detection should be rejected"
 
     def test_rejects_low_magnitude_detections(self):
         """Low magnitude detections (below threshold) should be rejected."""

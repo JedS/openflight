@@ -202,6 +202,14 @@ class KLD7Tracker:
     # antenna reflections or near-field artifacts.
     MIN_DISTANCE_M = 0.3
 
+    # Minimum number of frames in an event cluster. Single-frame detections
+    # are often spurious. Real ball passes span at least 2 frames.
+    MIN_EVENT_FRAMES = 2
+
+    # Minimum confidence score to return a result. Below this, the detection
+    # is too uncertain to be useful.
+    MIN_CONFIDENCE = 0.4
+
     def get_angle_for_shot(self) -> Optional[KLD7Angle]:
         """
         Search the ring buffer for the ball pass and extract angle data.
@@ -278,6 +286,10 @@ class KLD7Tracker:
         max_magnitude = max(d[3] for d in event_detections)
         num_frames = len(set(d[0] for d in event_detections))
 
+        # Frame count filter: reject events with too few frames
+        if num_frames < self.MIN_EVENT_FRAMES:
+            return None
+
         frame_score = min(num_frames / 3.0, 1.0)
         mag_score = min(max_magnitude / 5000.0, 1.0)
 
@@ -290,6 +302,9 @@ class KLD7Tracker:
 
         confidence = frame_score * 0.4 + mag_score * 0.3 + consistency_score * 0.3
         confidence = round(min(max(confidence, 0.0), 1.0), 2)
+
+        if confidence < self.MIN_CONFIDENCE:
+            return None
 
         if self.orientation == "vertical":
             return KLD7Angle(
