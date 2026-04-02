@@ -56,24 +56,24 @@
 }
 
 .shot-display__primary {
-  flex: 1.5;
+  flex: 0.8;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .shot-display__metrics {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-sm);
-  flex: 0.6;
+  flex: 1.2;
 }
 
 /* Speed Gauge */
 .speed-gauge {
   position: relative;
   width: 100%;
-  max-width: 560px;
+  max-width: 380px;
   aspect-ratio: 200 / 140;
 }
 
@@ -116,7 +116,7 @@
 /* Default: value fully visible, no animation */
 .speed-gauge__value {
   font-family: var(--font-display);
-  font-size: 7.5rem;
+  font-size: 5rem;
   font-weight: 400;
   color: var(--color-gold);
   line-height: 1;
@@ -415,10 +415,11 @@
   .shot-display__metrics {
     gap: var(--space-xs);
     min-height: 0;
+    grid-template-columns: 1fr 1fr;
   }
 
   .speed-gauge {
-    max-width: 280px;
+    max-width: 220px;
   }
 
   .speed-gauge__value {
