@@ -122,31 +122,9 @@ def estimate_carry_distance(ball_speed_mph: float, club: ClubType = ClubType.DRI
         max_carry_so_far = max(max_carry_so_far, midpoint)
         monotonic_driver_curve.append((speed, max_carry_so_far))
 
-    # Adjustment factors for different clubs (relative to driver)
-    # Based on typical smash factors and launch conditions
-    CLUB_FACTORS = {
-        ClubType.DRIVER: 1.0,
-        ClubType.WOOD_3: 0.96,  # Slightly less efficient
-        ClubType.WOOD_5: 0.93,
-        ClubType.WOOD_7: 0.91,
-        ClubType.HYBRID_3: 0.91,
-        ClubType.HYBRID_5: 0.89,
-        ClubType.HYBRID_7: 0.87,
-        ClubType.HYBRID_9: 0.85,
-        ClubType.IRON_2: 0.88,
-        ClubType.IRON_3: 0.87,
-        ClubType.IRON_4: 0.85,
-        ClubType.IRON_5: 0.82,
-        ClubType.IRON_6: 0.79,
-        ClubType.IRON_7: 0.76,
-        ClubType.IRON_8: 0.73,
-        ClubType.IRON_9: 0.70,
-        ClubType.PW: 0.67,
-        ClubType.GW: 0.64,
-        ClubType.SW: 0.62,
-        ClubType.LW: 0.61,
-        ClubType.UNKNOWN: 1.0,
-    }
+    # No club factor applied — ball speed already reflects the club's smash
+    # factor. Club-specific carry differences come from launch angle and spin
+    # adjustments applied downstream.
 
     # Interpolate from driver table
     if ball_speed_mph <= monotonic_driver_curve[0][0]:
@@ -175,9 +153,7 @@ def estimate_carry_distance(ball_speed_mph: float, club: ClubType = ClubType.DRI
             # Fallback (shouldn't reach here)
             carry = ball_speed_mph * 1.65
 
-    # Apply club factor
-    factor = CLUB_FACTORS.get(club, 1.0)
-    return carry * factor
+    return carry
 
 
 def adjust_carry_for_launch_angle(

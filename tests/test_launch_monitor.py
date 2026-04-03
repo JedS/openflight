@@ -30,22 +30,11 @@ class TestEstimateCarryDistance:
         carry = estimate_carry_distance(180, ClubType.DRIVER)
         assert 320 <= carry <= 350
 
-    def test_iron_7_lower_than_driver(self):
-        """7 iron at same ball speed should carry less than driver."""
+    def test_same_ball_speed_same_carry_regardless_of_club(self):
+        """Ball speed alone determines base carry — club differences come from spin/launch."""
         driver_carry = estimate_carry_distance(120, ClubType.DRIVER)
         iron_carry = estimate_carry_distance(120, ClubType.IRON_7)
-        assert iron_carry < driver_carry
-
-    def test_club_factor_ordering(self):
-        """Longer clubs should have higher distance factors."""
-        ball_speed = 130
-        driver = estimate_carry_distance(ball_speed, ClubType.DRIVER)
-        wood_3 = estimate_carry_distance(ball_speed, ClubType.WOOD_3)
-        iron_5 = estimate_carry_distance(ball_speed, ClubType.IRON_5)
-        iron_9 = estimate_carry_distance(ball_speed, ClubType.IRON_9)
-        pw = estimate_carry_distance(ball_speed, ClubType.PW)
-
-        assert driver > wood_3 > iron_5 > iron_9 > pw
+        assert driver_carry == iron_carry
 
     def test_low_speed_extrapolation(self):
         """Very low speeds should still return positive distance."""
@@ -110,8 +99,8 @@ class TestShot:
         assert 44.5 <= shot.ball_speed_ms <= 44.9
         assert 31.0 <= shot.club_speed_ms <= 31.5
 
-    def test_estimated_carry_uses_club_type(self):
-        """Estimated carry should vary by club type."""
+    def test_estimated_carry_same_at_same_ball_speed(self):
+        """Base carry depends only on ball speed, not club type."""
         driver_shot = Shot(
             ball_speed_mph=140.0,
             timestamp=datetime.now(),
@@ -122,7 +111,7 @@ class TestShot:
             timestamp=datetime.now(),
             club=ClubType.IRON_7,
         )
-        assert driver_shot.estimated_carry_yards > iron_shot.estimated_carry_yards
+        assert driver_shot.estimated_carry_yards == iron_shot.estimated_carry_yards
 
     def test_carry_range(self):
         """Carry range should be ±10% of estimate."""
