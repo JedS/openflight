@@ -493,8 +493,35 @@ def analyze_session(
     session_path: Path,
 ) -> tuple[dict[str, Any], list[ShotReview]]:
     session_meta, shots = load_session(session_path)
+    reviewable_shots = []
+    missing_buffer_shots = []
+
+    for shot_number, shot_bundle in shots.items():
+        if "buffer" not in shot_bundle:
+            missing_buffer_shots.append(shot_number)
+            continue
+        reviewable_shots.append((shot_number, shot_bundle))
+
+    if not reviewable_shots:
+        if missing_buffer_shots:
+            raise ValueError(
+                f"{session_path} has shots but no kld7_buffer entries. "
+                "This review workflow only works on session logs that include K-LD7 frame buffers."
+            )
+        raise ValueError(
+            f"{session_path} contains no reviewable shots."
+        )
+
+    if missing_buffer_shots:
+        session_meta["_review_warnings"] = [
+            (
+                "Skipped shots without kld7_buffer data: "
+                + ", ".join(str(shot_number) for shot_number in missing_buffer_shots)
+            )
+        ]
+
     results = [
         analyze_shot(shot_number, shot_bundle)
-        for shot_number, shot_bundle in shots.items()
+        for shot_number, shot_bundle in reviewable_shots
     ]
     return session_meta, results

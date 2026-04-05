@@ -481,8 +481,20 @@ def main() -> None:
     args = parser.parse_args()
 
     output_dir = args.output_dir or session_output_dir(args.session_file)
-    session_meta, results = analyze_session(args.session_file)
+    try:
+        session_meta, results = analyze_session(args.session_file)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+
+    if not results:
+        raise SystemExit(
+            f"No reviewable K-LD7 shots found in {args.session_file}."
+        )
+
     ensure_output_dir(output_dir)
+
+    for warning in session_meta.get("_review_warnings", []):
+        print(f"Warning: {warning}")
 
     for result in results:
         plot_shot_profile(
