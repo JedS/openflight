@@ -528,11 +528,73 @@ class KLD7Tracker:
             confidence=confidence, num_frames=1, detection_class="club",
         )
 
-    def get_angle_for_shot(self, shot_timestamp: Optional[float] = None) -> Optional[KLD7Angle]:
+    def _extract_ball_radc(self, ball_speed_mph: float) -> Optional[KLD7Angle]:
+        """Extract ball launch angle via RADC phase interferometry.
+
+        Uses the OPS243-measured ball speed to narrow the FFT velocity
+        search band, then extracts angle from F1A/F2A phase difference.
+        """
+        from .radc import extract_launch_angle
+
+        frames = [
+            {"timestamp": f.timestamp, "radc": f.radc}
+            for f in self._ring_buffer
+            if f.radc is not None
+        ]
+
+        if not frames:
+            return None
+
+        results = extract_launch_angle(
+            frames,
+            ops243_ball_speed_mph=ball_speed_mph,
+            angle_offset_deg=self.angle_offset_deg,
+            speed_tolerance_mph=10.0,
+        )
+
+        if not results:
+            logger.debug("K-LD7 RADC: no ball detections for %.1f mph", ball_speed_mph)
+            return None
+
+        best = results[0]
+        logger.info(
+            "K-LD7 RADC: angle=%.1f° speed=%.1f mph snr=%.1f conf=%.2f frames=%d",
+            best["launch_angle_deg"], best["ball_speed_mph"],
+            best["avg_snr_db"], best["confidence"], best["frame_count"],
+        )
+
+        if self.orientation == "vertical":
+            return KLD7Angle(
+                vertical_deg=best["launch_angle_deg"],
+                horizontal_deg=None,
+                confidence=best["confidence"],
+                num_frames=best["frame_count"],
+                magnitude=best["avg_snr_db"],
+                detection_class="ball",
+            )
+        return KLD7Angle(
+            vertical_deg=None,
+            horizontal_deg=best["launch_angle_deg"],
+            confidence=best["confidence"],
+            num_frames=best["frame_count"],
+            magnitude=best["avg_snr_db"],
+            detection_class="ball",
+        )
+
+    def get_angle_for_shot(self, shot_timestamp: Optional[float] = None, ball_speed_mph: Optional[float] = None) -> Optional[KLD7Angle]:
         """Search the ring buffer for the ball launch angle.
 
-        Uses distance-based detection: ball = fast targets at >3.8m.
+        Tries RADC phase interferometry first (if ball_speed_mph is provided),
+        then falls back to PDAT distance-based detection.
         """
+        if ball_speed_mph is not None:
+            try:
+                radc_result = self._extract_ball_radc(ball_speed_mph)
+                if radc_result is not None:
+                    return radc_result
+            except Exception as e:
+                logger.warning("K-LD7 RADC extraction failed, falling back to PDAT: %s", e)
+
         return self._extract_ball(shot_timestamp)
 
     def get_club_angle(self, shot_timestamp: Optional[float] = None) -> Optional[KLD7Angle]:

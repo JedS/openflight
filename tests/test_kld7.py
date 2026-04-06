@@ -760,3 +760,145 @@ class TestKLD7Integration:
 
         tracker.reset()
         assert tracker.get_angle_for_shot() is None
+
+
+class TestRADCAngleExtraction:
+    """Tests for RADC-based phase-interferometry launch angle extraction."""
+
+    def _make_tracker(self, orientation="vertical"):
+        tracker = KLD7Tracker.__new__(KLD7Tracker)
+        tracker.orientation = orientation
+        tracker.buffer_seconds = 2.0
+        tracker.max_buffer_frames = 70
+        tracker.angle_offset_deg = 0.0
+        tracker._init_ring_buffer()
+        return tracker
+
+    def _make_radc_payload_with_tone(self, velocity_kmh, angle_deg=10.0, amplitude=5000):
+        """Create a synthetic RADC payload with a tone at the given velocity."""
+        from openflight.kld7.radc import ANTENNA_SPACING_M, WAVELENGTH_M, SAMPLES_PER_CHANNEL
+
+        n = SAMPLES_PER_CHANNEL  # 256
+        max_speed_kmh = 100.0
+
+        # Velocity to normalized frequency
+        if velocity_kmh >= 0:
+            norm_freq = velocity_kmh / (2 * max_speed_kmh)
+        else:
+            norm_freq = 1.0 + velocity_kmh / (2 * max_speed_kmh)
+
+        t = np.arange(n)
+        phase_per_sample = 2 * np.pi * norm_freq
+
+        # F1A channel: reference (compute in float, then convert to uint16 with DC offset)
+        f1a_i = (amplitude * np.cos(phase_per_sample * t) + 32768).astype(np.uint16)
+        f1a_q = (amplitude * np.sin(phase_per_sample * t) + 32768).astype(np.uint16)
+
+        # F2A channel: same tone shifted by angle-dependent phase
+        angle_rad = np.radians(angle_deg)
+        steering_phase = 2 * np.pi * ANTENNA_SPACING_M * np.sin(angle_rad) / WAVELENGTH_M
+        f2a_i = (amplitude * np.cos(phase_per_sample * t + steering_phase) + 32768).astype(np.uint16)
+        f2a_q = (amplitude * np.sin(phase_per_sample * t + steering_phase) + 32768).astype(np.uint16)
+
+        # F1B channel: zeros (not used for angle)
+        zeros = np.full(n, 32768, dtype=np.uint16)
+
+        payload = b""
+        for ch in [f1a_i, f1a_q, f2a_i, f2a_q, zeros, zeros]:
+            payload += ch.astype(np.uint16).tobytes()
+        return payload
+
+    def _make_quiet_radc_payload(self, rng=None):
+        """Create a quiet RADC payload (DC + small noise, no velocity tone)."""
+        from openflight.kld7.radc import SAMPLES_PER_CHANNEL
+
+        if rng is None:
+            rng = np.random.default_rng(42)
+        n = SAMPLES_PER_CHANNEL
+        payload = b""
+        for _ in range(6):
+            noise = (32768 + rng.integers(-50, 50, size=n)).astype(np.uint16)
+            payload += noise.tobytes()
+        return payload
+
+    def test_extracts_angle_from_radc_with_ball_speed(self):
+        """RADC extraction should find the angle at the OPS-anchored velocity bin."""
+        tracker = self._make_tracker()
+        now = time.time()
+
+        ball_speed_mph = 72.0
+        ball_kmh = ball_speed_mph * 1.609
+        aliased_kmh = ball_kmh % 200.0
+        if aliased_kmh > 100.0:
+            aliased_kmh -= 200.0
+        target_angle = 12.0
+
+        radc = self._make_radc_payload_with_tone(aliased_kmh, angle_deg=target_angle)
+        quiet = self._make_quiet_radc_payload()
+
+        for i in range(10):
+            tracker._add_frame(KLD7Frame(timestamp=now + i * 0.056, radc=quiet))
+        tracker._add_frame(KLD7Frame(timestamp=now + 0.56, radc=radc))
+        for i in range(10):
+            tracker._add_frame(KLD7Frame(timestamp=now + 0.62 + i * 0.056, radc=quiet))
+
+        result = tracker.get_angle_for_shot(ball_speed_mph=ball_speed_mph)
+        assert result is not None
+        assert result.detection_class == "ball"
+        assert result.vertical_deg == pytest.approx(target_angle, abs=3.0)
+        assert result.confidence > 0.0
+
+    def test_falls_back_to_pdat_without_radc(self):
+        """When no RADC frames are present, should fall back to PDAT-based detection."""
+        tracker = self._make_tracker()
+        now = time.time()
+
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033,
+                pdat=[{"distance": 4.2, "speed": 25.0, "angle": 15.0, "magnitude": 2500}],
+            ))
+
+        result = tracker.get_angle_for_shot(ball_speed_mph=72.0)
+        assert result is not None
+        assert result.detection_class == "ball"
+        assert 14.0 < result.vertical_deg < 16.0
+
+    def test_falls_back_to_pdat_without_ball_speed(self):
+        """When ball_speed_mph is None, should use PDAT-based detection."""
+        tracker = self._make_tracker()
+        now = time.time()
+
+        for i in range(3):
+            tracker._add_frame(KLD7Frame(
+                timestamp=now + i * 0.033,
+                pdat=[{"distance": 4.2, "speed": 25.0, "angle": 15.0, "magnitude": 2500}],
+            ))
+
+        result = tracker.get_angle_for_shot(ball_speed_mph=None)
+        assert result is not None
+
+    def test_angle_offset_applied_to_radc(self):
+        """Angle offset should be applied to RADC-extracted angle."""
+        tracker = self._make_tracker()
+        tracker.angle_offset_deg = 5.0
+        now = time.time()
+
+        ball_speed_mph = 72.0
+        ball_kmh = ball_speed_mph * 1.609
+        aliased_kmh = ball_kmh % 200.0
+        if aliased_kmh > 100.0:
+            aliased_kmh -= 200.0
+
+        radc = self._make_radc_payload_with_tone(aliased_kmh, angle_deg=10.0)
+        quiet = self._make_quiet_radc_payload()
+
+        for i in range(10):
+            tracker._add_frame(KLD7Frame(timestamp=now + i * 0.056, radc=quiet))
+        tracker._add_frame(KLD7Frame(timestamp=now + 0.56, radc=radc))
+        for i in range(10):
+            tracker._add_frame(KLD7Frame(timestamp=now + 0.62 + i * 0.056, radc=quiet))
+
+        result = tracker.get_angle_for_shot(ball_speed_mph=ball_speed_mph)
+        assert result is not None
+        assert result.vertical_deg == pytest.approx(15.0, abs=3.0)
