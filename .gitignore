@@ -60,3 +60,7 @@ htmlcov/
 # UI (Node.js)
 ui/node_modules/
 ui/dist/autoresearch-results.tsv
+/.vs/openflight/CopilotIndices/17.14.1641.39856
+/.vs/openflight/FileContentIndex
+/.vs/openflight/v17
+/.vs
