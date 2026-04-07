@@ -582,21 +582,42 @@ class RollingBufferProcessor:
         Returns:
             ProcessedCapture with all extracted data, or None if processing fails
         """
-        # Process with overlapping FFT for high resolution
+        # Use non-overlapping (standard) processing to find ball speed.
+        # Standard processing is more robust because each 128-sample window
+        # is independent — overlapping windows can share a transient that
+        # produces spurious high-frequency peaks in 1-2 windows, and a raw
+        # max() over all windows would pick those outliers as ball speed.
+        standard = self.process_standard(capture)
+        std_outbound = [r for r in standard.readings if r.is_outbound]
+        if not std_outbound:
+            logger.warning("No outbound readings found")
+            return None
+
+        ball_reading_std = max(std_outbound, key=lambda r: r.speed_mph)
+        ball_speed_mph = ball_reading_std.speed_mph
+
+        # Process with overlapping FFT for high-resolution timeline (needed for spin)
         timeline = self.process_overlapping(capture)
 
         if not timeline.readings:
             logger.warning("No valid readings extracted from capture")
             return None
 
-        # Find ball (peak outbound speed)
+        # Find the ball in the overlapping timeline at the standard-detected speed
+        # (within tolerance) to get the precise timestamp for spin analysis
         outbound = [r for r in timeline.readings if r.is_outbound]
-        if not outbound:
-            logger.warning("No outbound readings found")
-            return None
+        ball_candidates = [
+            r for r in outbound
+            if abs(r.speed_mph - ball_speed_mph) <= 3.0
+        ]
+        if ball_candidates:
+            ball_reading = max(ball_candidates, key=lambda r: r.magnitude)
+        elif outbound:
+            # Fallback: closest speed to standard result
+            ball_reading = min(outbound, key=lambda r: abs(r.speed_mph - ball_speed_mph))
+        else:
+            ball_reading = ball_reading_std
 
-        ball_reading = max(outbound, key=lambda r: r.speed_mph)
-        ball_speed_mph = ball_reading.speed_mph
         ball_timestamp_ms = ball_reading.timestamp_ms
 
         # Find club speed

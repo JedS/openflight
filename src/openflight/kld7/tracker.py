@@ -161,10 +161,15 @@ class KLD7Tracker:
         frame_count = 0
         radc_count = 0
 
+        logger.info("K-LD7 stream thread started, requesting: RADC+TDAT+PDAT")
+
         try:
             for code, payload in self._radar.stream_frames(frame_codes, max_count=-1):
                 if not self._running:
                     break
+
+                if frame_count == 0:
+                    logger.info("K-LD7 first frame received: code=%s", code)
 
                 if code in seen_in_frame:
                     self._add_frame(current_frame)
@@ -191,9 +196,11 @@ class KLD7Tracker:
             if seen_in_frame:
                 self._add_frame(current_frame)
 
+            logger.warning("K-LD7 stream ended (frames=%d, radc=%d, running=%s)",
+                          frame_count, radc_count, self._running)
+
         except Exception as e:
-            if self._running:
-                logger.error("K-LD7 stream error: %s", e)
+            logger.error("K-LD7 stream CRASHED after %d frames: %s", frame_count, e, exc_info=True)
 
     def _add_frame(self, frame: KLD7Frame):
         """Add a frame to the ring buffer."""
