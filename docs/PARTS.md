@@ -10,6 +10,8 @@ Hardware components for building the OpenFlight golf launch monitor.
 |------|-------------|------|--------|
 | **OPS243-A Radar** | Doppler radar for ball/club speed detection | [OmniPreSense](https://omnipresense.com/product/ops243-a-doppler-radar-sensor/) | $249 |
 | **Raspberry Pi 5** | Main compute unit (4GB+ recommended) | [Adafruit](https://www.adafruit.com/product/5812) | $60 |
+
+> **WARNING: Do NOT buy the OPS243-A-W (WiFi version).** The WiFi module locks the serial baud rate to 19200, which is far too slow for I/Q data transfer. OpenFlight requires the standard **OPS243-A** (USB only) which runs at 57600 baud over CDC-ACM. The WiFi version is not compatible.
 | **7" Touchscreen Display** | HMTECH 7" 1024x600 IPS display | [Amazon](https://www.amazon.com/dp/B0D3QB7X4Z) | $46 |
 
 ## Sound Trigger (for Rolling Buffer Mode)
