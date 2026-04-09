@@ -395,7 +395,7 @@ class TestOnShotDetected:
                 calls.append(("reset", None))
 
         emitted = []
-        monkeypatch.setattr(server_module, "kld7_tracker", StubTracker())
+        monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "camera_tracker", None)
         monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
@@ -429,7 +429,7 @@ class TestOnShotDetected:
             def reset(self):
                 return None
 
-        monkeypatch.setattr(server_module, "kld7_tracker", StubTracker())
+        monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "camera_tracker", None)
         monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
@@ -462,7 +462,7 @@ class TestOnShotDetected:
             def reset(self):
                 return None
 
-        monkeypatch.setattr(server_module, "kld7_tracker", StubTracker())
+        monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "camera_tracker", None)
         monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)

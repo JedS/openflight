@@ -57,8 +57,9 @@ debug_mode: bool = False
 debug_log_file = None
 debug_log_path: Optional[Path] = None
 
-# K-LD7 angle radar
-kld7_tracker = None
+# K-LD7 angle radars (vertical = launch angle, horizontal = club path)
+kld7_vertical = None
+kld7_horizontal = None
 
 # Camera state
 camera: Optional["Picamera2"] = None
@@ -360,32 +361,42 @@ def init_camera(
         return False
 
 
-def init_kld7(port=None, orientation="vertical", angle_offset_deg=0.0) -> bool:
-    """Initialize K-LD7 angle radar tracker."""
-    global kld7_tracker  # pylint: disable=global-statement
+def init_kld7(port=None, orientation="vertical", angle_offset_deg=0.0, base_freq=0) -> bool:
+    """Initialize a single K-LD7 angle radar tracker.
+
+    Returns True if the tracker connected and started successfully.
+    Sets the appropriate global (kld7_vertical or kld7_horizontal).
+    """
+    global kld7_vertical, kld7_horizontal  # pylint: disable=global-statement
     try:
         from openflight.kld7 import KLD7Tracker
 
-        kld7_tracker = KLD7Tracker(port=port, orientation=orientation, angle_offset_deg=angle_offset_deg)
-        if kld7_tracker.connect():
-            kld7_tracker.start()
-            logger.info("[SERVER] K-LD7 initialized (port=%s, orientation=%s, offset=%.1f°)",
-                         port or "auto", orientation, angle_offset_deg)
+        tracker = KLD7Tracker(
+            port=port, orientation=orientation,
+            angle_offset_deg=angle_offset_deg, base_freq=base_freq,
+        )
+        if tracker.connect():
+            tracker.start()
+            logger.info("[SERVER] K-LD7 %s initialized (port=%s, offset=%.1f°, RBFR=%d)",
+                         orientation, port or "auto", angle_offset_deg, base_freq)
             session_log = get_session_logger()
             if session_log:
                 session_log.log_connection(
-                    device="kld7",
-                    port=kld7_tracker.port or "auto",
+                    device="kld7_%s" % orientation,
+                    port=tracker.port or "auto",
                     baud=3000000,
                     radc_available=True,
+                    base_freq=base_freq,
                 )
+            if orientation == "vertical":
+                kld7_vertical = tracker
+            else:
+                kld7_horizontal = tracker
             return True
         else:
-            kld7_tracker = None
             return False
     except Exception as e:
-        logger.warning("[SERVER] K-LD7 initialization failed: %s", e, exc_info=True)
-        kld7_tracker = None
+        logger.warning("[SERVER] K-LD7 %s initialization failed: %s", orientation, e, exc_info=True)
         return False
 
 
@@ -854,81 +865,97 @@ def on_shot_detected(shot: Shot):
     logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
     kld7_ms = None
-    # Try K-LD7 angle radar first (highest priority for angle data)
+    # Process K-LD7 angle radars (vertical = launch angle, horizontal = club path)
     try:
-        if kld7_tracker and shot.mode != "mock":
+        if shot.mode != "mock":
             kld7_start = time.time()
             shot_ts = shot.impact_timestamp or kld7_start
-            radar_vertical_accepted = True
-            radar_guard_details = None
+            session_log = get_session_logger()
 
-            # Snapshot raw buffer BEFORE processing (for correlation analysis)
-            raw_buffer = kld7_tracker.snapshot_buffer()
-
-            kld7_angle = kld7_tracker.get_angle_for_shot(
-                shot_timestamp=shot_ts,
-                ball_speed_mph=shot.ball_speed_mph,
-            )
-            if kld7_angle and kld7_angle.vertical_deg is not None:
-                radar_vertical_accepted, radar_guard_details = radar_launch_is_plausible(
-                    radar_angle_deg=kld7_angle.vertical_deg,
-                    club=shot.club,
+            # --- Vertical K-LD7 (launch angle) ---
+            if kld7_vertical:
+                raw_buffer = kld7_vertical.snapshot_buffer()
+                kld7_angle = kld7_vertical.get_angle_for_shot(
+                    shot_timestamp=shot_ts,
                     ball_speed_mph=shot.ball_speed_mph,
-                    club_speed_mph=shot.club_speed_mph,
-                    spin_rpm=shot.spin_rpm,
                 )
-                if not radar_vertical_accepted:
-                    logger.warning(
-                        "[SERVER] K-LD7 vertical angle %.1f° rejected for %s at %.1f mph: "
-                        "expected %.1f° ± %.1f° (delta %.1f°)",
-                        kld7_angle.vertical_deg,
-                        shot.club.value,
-                        shot.ball_speed_mph,
-                        radar_guard_details["expected_launch_deg"],
-                        radar_guard_details["allowed_delta_deg"],
-                        radar_guard_details["delta_deg"],
+                if kld7_angle and kld7_angle.vertical_deg is not None:
+                    accepted, guard_details = radar_launch_is_plausible(
+                        radar_angle_deg=kld7_angle.vertical_deg,
+                        club=shot.club,
+                        ball_speed_mph=shot.ball_speed_mph,
+                        club_speed_mph=shot.club_speed_mph,
+                        spin_rpm=shot.spin_rpm,
                     )
-            if kld7_angle:
-                if kld7_angle.vertical_deg is not None and radar_vertical_accepted:
-                    shot.launch_angle_vertical = kld7_angle.vertical_deg
-                    shot.launch_angle_confidence = kld7_angle.confidence
-                    shot.angle_source = "radar"
-                    logger.info(
-                        "[SERVER] Angle source: radar (%.1f°, conf=%.0f%%, %d frames)",
-                        kld7_angle.vertical_deg, kld7_angle.confidence * 100,
-                        kld7_angle.num_frames,
+                    if accepted:
+                        shot.launch_angle_vertical = kld7_angle.vertical_deg
+                        shot.launch_angle_confidence = kld7_angle.confidence
+                        shot.angle_source = "radar"
+                        logger.info(
+                            "[SERVER] Vertical angle: %.1f° (conf=%.0f%%, %d frames)",
+                            kld7_angle.vertical_deg, kld7_angle.confidence * 100,
+                            kld7_angle.num_frames,
+                        )
+                    else:
+                        logger.warning(
+                            "[SERVER] Vertical angle %.1f° rejected: expected %.1f° ± %.1f°",
+                            kld7_angle.vertical_deg,
+                            guard_details["expected_launch_deg"],
+                            guard_details["allowed_delta_deg"],
+                        )
+                if session_log and raw_buffer:
+                    session_log.log_kld7_buffer(
+                        shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                        shot_timestamp=shot_ts,
+                        orientation="vertical",
+                        buffer_frames=raw_buffer,
+                        ball_angle={
+                            "vertical_deg": kld7_angle.vertical_deg,
+                            "confidence": kld7_angle.confidence,
+                            "detection_class": kld7_angle.detection_class,
+                            "magnitude": kld7_angle.magnitude,
+                            "num_frames": kld7_angle.num_frames,
+                        } if kld7_angle else None,
                     )
-                if kld7_angle.horizontal_deg is not None:
-                    shot.launch_angle_horizontal = kld7_angle.horizontal_deg
+                kld7_vertical.reset()
+
+            # --- Horizontal K-LD7 (club path / aim direction) ---
+            if kld7_horizontal:
+                raw_buffer_h = kld7_horizontal.snapshot_buffer()
+                kld7_angle_h = kld7_horizontal.get_angle_for_shot(
+                    shot_timestamp=shot_ts,
+                    ball_speed_mph=shot.ball_speed_mph,
+                )
+                if kld7_angle_h and kld7_angle_h.horizontal_deg is not None:
+                    shot.launch_angle_horizontal = kld7_angle_h.horizontal_deg
                     if shot.angle_source is None:
                         shot.angle_source = "radar"
-                        shot.launch_angle_confidence = kld7_angle.confidence
+                    if shot.launch_angle_confidence is None:
+                        shot.launch_angle_confidence = kld7_angle_h.confidence
                     logger.info(
-                        "[SERVER] K-LD7 horizontal angle: %.1f° (conf: %.0f%%)",
-                        kld7_angle.horizontal_deg, kld7_angle.confidence * 100,
+                        "[SERVER] Horizontal angle: %.1f° (conf=%.0f%%, %d frames)",
+                        kld7_angle_h.horizontal_deg, kld7_angle_h.confidence * 100,
+                        kld7_angle_h.num_frames,
                     )
-            # Log raw K-LD7 buffer alongside OPS shot for correlation analysis
-            session_log = get_session_logger()
-            if session_log and raw_buffer:
-                session_log.log_kld7_buffer(
-                    shot_number=session_log.stats.get("shots_detected", 0) + 1,
-                    shot_timestamp=shot_ts,
-                    orientation=kld7_tracker.orientation,
-                    buffer_frames=raw_buffer,
-                    ball_angle={
-                        "vertical_deg": kld7_angle.vertical_deg,
-                        "confidence": kld7_angle.confidence,
-                        "detection_class": kld7_angle.detection_class,
-                        "magnitude": kld7_angle.magnitude,
-                        "num_frames": kld7_angle.num_frames,
-                        "accepted": radar_vertical_accepted,
-                        "sanity_check": radar_guard_details,
-                    } if kld7_angle else None,
-                )
+                if session_log and raw_buffer_h:
+                    session_log.log_kld7_buffer(
+                        shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                        shot_timestamp=shot_ts,
+                        orientation="horizontal",
+                        buffer_frames=raw_buffer_h,
+                        ball_angle={
+                            "horizontal_deg": kld7_angle_h.horizontal_deg,
+                            "confidence": kld7_angle_h.confidence,
+                            "detection_class": kld7_angle_h.detection_class,
+                            "magnitude": kld7_angle_h.magnitude,
+                            "num_frames": kld7_angle_h.num_frames,
+                        } if kld7_angle_h else None,
+                    )
+                kld7_horizontal.reset()
 
-            kld7_tracker.reset()
-            kld7_ms = (time.time() - kld7_start) * 1000
-            logger.info("[SERVER] K-LD7 processing: %.1fms", kld7_ms)
+            if kld7_vertical or kld7_horizontal:
+                kld7_ms = (time.time() - kld7_start) * 1000
+                logger.info("[SERVER] K-LD7 processing: %.1fms", kld7_ms)
     except Exception as e:
         logger.warning("[SERVER] K-LD7 processing error: %s", e, exc_info=True)
 
@@ -1458,22 +1485,28 @@ def main():
         help="Radar sample rate in ksps (default: 30). Lower = longer buffer but lower max speed. 25=174mph/164ms, 27=187mph/152ms",
     )
     parser.add_argument(
-        "--kld7", action="store_true", help="Enable K-LD7 angle radar module"
+        "--kld7", action="store_true", help="Enable K-LD7 vertical angle radar (launch angle)"
     )
     parser.add_argument(
-        "--kld7-port", default=None, help="K-LD7 serial port (auto-detect if not specified)"
-    )
-    parser.add_argument(
-        "--kld7-orientation",
-        choices=["vertical", "horizontal"],
-        default="vertical",
-        help="K-LD7 mount orientation — which angle plane it measures (default: vertical)",
+        "--kld7-port", default=None, help="K-LD7 vertical serial port (auto-detect if not specified)"
     )
     parser.add_argument(
         "--kld7-angle-offset",
         type=float,
         default=0.0,
-        help="K-LD7 angle offset in degrees to correct for mounting tilt (default: 0.0)",
+        help="K-LD7 vertical angle offset in degrees (default: 0.0)",
+    )
+    parser.add_argument(
+        "--kld7-horizontal", action="store_true", help="Enable K-LD7 horizontal angle radar (club path)"
+    )
+    parser.add_argument(
+        "--kld7-horizontal-port", default=None, help="K-LD7 horizontal serial port"
+    )
+    parser.add_argument(
+        "--kld7-horizontal-offset",
+        type=float,
+        default=0.0,
+        help="K-LD7 horizontal angle offset in degrees (default: 0.0)",
     )
     args = parser.parse_args()
 
@@ -1546,13 +1579,23 @@ def main():
     else:
         print("Camera disabled by --no-camera flag")
 
-    # Initialize K-LD7 angle radar (if enabled)
+    # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:
-        if init_kld7(port=args.kld7_port, orientation=args.kld7_orientation, angle_offset_deg=args.kld7_angle_offset):
+        if init_kld7(port=args.kld7_port, orientation="vertical",
+                     angle_offset_deg=args.kld7_angle_offset, base_freq=0):
             offset_str = f", offset: {args.kld7_angle_offset:+.1f}°" if args.kld7_angle_offset else ""
-            print(f"K-LD7 angle radar enabled (orientation: {args.kld7_orientation}{offset_str})")
+            print(f"K-LD7 vertical radar enabled (launch angle{offset_str})")
         else:
-            print("ERROR: K-LD7 requested but failed to connect. Exiting.")
+            print("ERROR: K-LD7 vertical requested but failed to connect. Exiting.")
+            sys.exit(1)
+
+    if args.kld7_horizontal:
+        if init_kld7(port=args.kld7_horizontal_port, orientation="horizontal",
+                     angle_offset_deg=args.kld7_horizontal_offset, base_freq=2):
+            offset_str = f", offset: {args.kld7_horizontal_offset:+.1f}°" if args.kld7_horizontal_offset else ""
+            print(f"K-LD7 horizontal radar enabled (club path{offset_str})")
+        else:
+            print("ERROR: K-LD7 horizontal requested but failed to connect. Exiting.")
             sys.exit(1)
 
     start_monitor(
@@ -1578,8 +1621,10 @@ def main():
             app, host=args.host, port=args.web_port, debug=False, allow_unsafe_werkzeug=True
         )
     finally:
-        if kld7_tracker:
-            kld7_tracker.stop()
+        if kld7_vertical:
+            kld7_vertical.stop()
+        if kld7_horizontal:
+            kld7_horizontal.stop()
         stop_camera_thread()
         if camera:
             camera.stop()
