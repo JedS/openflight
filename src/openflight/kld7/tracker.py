@@ -80,12 +80,12 @@ class KLD7Tracker:
         try:
             from kld7 import KLD7
         except ImportError:
-            logger.error("kld7 package not installed. Run: pip install kld7")
+            logger.error("[KLD7] kld7 package not installed. Run: pip install kld7")
             return False
 
         port = self.port or _find_port()
         if not port:
-            logger.error("No K-LD7 EVAL board detected")
+            logger.error("[KLD7] No K-LD7 EVAL board detected")
             return False
 
         # Flush the serial port before the kld7 library handshake.
@@ -100,19 +100,21 @@ class KLD7Tracker:
                 ser.write(b"GBYE\r\n")
                 time.sleep(0.2)
                 ser.reset_input_buffer()
-            logger.debug("K-LD7 serial port flushed on %s", port)
+            logger.debug("[KLD7] Serial port flushed on %s", port)
         except Exception as e:
-            logger.debug("K-LD7 pre-flush failed (not critical): %s", e)
+            logger.debug("[KLD7] Pre-flush failed (not critical): %s", e)
 
         try:
             self._radar = KLD7(port, baudrate=3000000)
             actual_baud = getattr(self._radar._port, 'baudrate', 'unknown') if hasattr(self._radar, '_port') else 'unknown'
-            logger.info("K-LD7 connected on %s at %s baud", port, actual_baud)
+            logger.info("[KLD7] Connected on %s at %s baud", port, actual_baud)
         except Exception as e:
-            logger.error("K-LD7 connection failed: %s", e)
+            logger.error("[KLD7] Connection failed: %s", e, exc_info=True)
             return False
 
         self._configure_for_golf()
+        logger.info("[KLD7] Ready: port=%s, baud=%s, range=%dm, speed=%dkm/h, orientation=%s",
+                     port, actual_baud, self.range_m, self.speed_kmh, self.orientation)
         return True
 
     def _configure_for_golf(self):
@@ -135,7 +137,7 @@ class KLD7Tracker:
         params.VISU = 0
 
         logger.info(
-            "K-LD7 configured: range=%dm, speed=%dkm/h, orientation=%s",
+            "[KLD7] Configured: range=%dm, speed=%dkm/h, orientation=%s",
             self.range_m, self.speed_kmh, self.orientation,
         )
 
@@ -146,7 +148,7 @@ class KLD7Tracker:
         self._running = True
         self._stream_thread = threading.Thread(target=self._stream_loop, daemon=True)
         self._stream_thread.start()
-        logger.info("K-LD7 streaming started (orientation=%s)", self.orientation)
+        logger.info("[KLD7] Streaming started (orientation=%s)", self.orientation)
 
     def stop(self):
         """Stop streaming and close connection."""
@@ -164,7 +166,7 @@ class KLD7Tracker:
             except Exception:
                 pass
             self._radar = None
-        logger.info("K-LD7 stopped")
+        logger.info("[KLD7] Stopped")
 
     def _stream_loop(self):
         """Background thread: stream RADC+TDAT+PDAT into ring buffer."""
@@ -176,7 +178,7 @@ class KLD7Tracker:
         frame_count = 0
         radc_count = 0
 
-        logger.info("K-LD7 stream thread started, requesting: RADC+TDAT+PDAT")
+        logger.info("[KLD7] Stream started: requesting RADC+TDAT+PDAT")
 
         try:
             for code, payload in self._radar.stream_frames(frame_codes, max_count=-1):
@@ -184,16 +186,16 @@ class KLD7Tracker:
                     break
 
                 if frame_count == 0:
-                    logger.info("K-LD7 first frame received: code=%s", code)
+                    logger.info("[KLD7] First frame received: %s", code)
 
                 if code in seen_in_frame:
                     self._add_frame(current_frame)
                     frame_count += 1
                     if frame_count == 50:
                         logger.info(
-                            "K-LD7 stream: %d frames, %d with RADC (%s)",
+                            "[KLD7] Stream health: %d frames, %d RADC (%s)",
                             frame_count, radc_count,
-                            "RADC active" if radc_count > 0 else "NO RADC - check baud rate",
+                            "RADC active" if radc_count > 0 else "NO RADC",
                         )
                     current_frame = KLD7Frame(timestamp=time.time())
                     seen_in_frame = set()
@@ -203,6 +205,8 @@ class KLD7Tracker:
                 if code == "RADC":
                     current_frame.radc = payload
                     radc_count += 1
+                    if radc_count == 1:
+                        logger.info("[KLD7] First RADC frame received (%d bytes)", len(payload) if payload else 0)
                 elif code == "TDAT":
                     current_frame.tdat = _target_to_dict(payload)
                 elif code == "PDAT":
@@ -211,11 +215,11 @@ class KLD7Tracker:
             if seen_in_frame:
                 self._add_frame(current_frame)
 
-            logger.warning("K-LD7 stream ended (frames=%d, radc=%d, running=%s)",
+            logger.warning("[KLD7] Stream ended (frames=%d, radc=%d, running=%s)",
                           frame_count, radc_count, self._running)
 
         except Exception as e:
-            logger.error("K-LD7 stream CRASHED after %d frames: %s", frame_count, e, exc_info=True)
+            logger.error("[KLD7] Stream crashed after %d frames: %s", frame_count, e, exc_info=True)
 
     def _add_frame(self, frame: KLD7Frame):
         """Add a frame to the ring buffer."""
@@ -478,7 +482,7 @@ class KLD7Tracker:
         """
         ball_bursts = self._collect_ball_bursts()
         if not ball_bursts:
-            logger.debug("K-LD7 ball: no far/fast targets in %d buffer frames",
+            logger.debug("[KLD7] Ball: no far/fast targets in %d buffer frames",
                           len(self._ring_buffer))
             return None
 
@@ -501,11 +505,11 @@ class KLD7Tracker:
         confidence = best_burst["confidence"]
 
         if confidence < self.MIN_CONFIDENCE:
-            logger.debug("K-LD7 ball: rejected — confidence %.2f < %.2f",
+            logger.debug("[KLD7] Ball: rejected — confidence %.2f < %.2f",
                           confidence, self.MIN_CONFIDENCE)
             return None
 
-        logger.info("K-LD7 ball: angle=%.1f° dist=%.2fm mag=%d frames=%d conf=%.2f",
+        logger.info("[KLD7] Ball: angle=%.1f° dist=%.2fm mag=%d frames=%d conf=%.2f",
                      avg_angle, avg_distance, max_magnitude, num_frames, confidence)
 
         corrected_angle = round(avg_angle + getattr(self, "angle_offset_deg", 0.0), 1)
@@ -531,7 +535,7 @@ class KLD7Tracker:
         """
         club_candidates = self._collect_club_candidates(shot_timestamp=shot_timestamp)
         if not club_candidates:
-            logger.debug("K-LD7 club: no speed transition found in %d buffer frames",
+            logger.debug("[KLD7] Club: no speed transition found in %d buffer frames",
                           len(self._ring_buffer))
             return None
 
@@ -543,11 +547,11 @@ class KLD7Tracker:
         confidence = best_transition["confidence"]
 
         if confidence < self.MIN_CONFIDENCE:
-            logger.debug("K-LD7 club: rejected — confidence %.2f < %.2f",
+            logger.debug("[KLD7] Club: rejected — confidence %.2f < %.2f",
                           confidence, self.MIN_CONFIDENCE)
             return None
 
-        logger.info("K-LD7 club: angle=%.1f° dist=%.2fm mag=%d targets=%d conf=%.2f",
+        logger.info("[KLD7] Club: angle=%.1f° dist=%.2fm mag=%d targets=%d conf=%.2f",
                      avg_angle, avg_dist, max_magnitude, n_targets, confidence)
 
         corrected_angle = round(avg_angle + getattr(self, "angle_offset_deg", 0.0), 1)
@@ -581,6 +585,9 @@ class KLD7Tracker:
         if not frames:
             return None
 
+        logger.info("[KLD7] RADC: examining %d frames with RADC data, ball_speed=%.1f mph",
+                     len(frames), ball_speed_mph)
+
         results = extract_launch_angle(
             frames,
             ops243_ball_speed_mph=ball_speed_mph,
@@ -589,12 +596,12 @@ class KLD7Tracker:
         )
 
         if not results:
-            logger.debug("K-LD7 RADC: no ball detections for %.1f mph", ball_speed_mph)
+            logger.debug("[KLD7] RADC: no ball detections for %.1f mph", ball_speed_mph)
             return None
 
         best = results[0]
         logger.info(
-            "K-LD7 RADC: angle=%.1f° speed=%.1f mph snr=%.1f conf=%.2f frames=%d",
+            "[KLD7] RADC: angle=%.1f° speed=%.1f mph snr=%.1f conf=%.2f frames=%d",
             best["launch_angle_deg"], best["ball_speed_mph"],
             best["avg_snr_db"], best["confidence"], best["frame_count"],
         )
@@ -623,15 +630,25 @@ class KLD7Tracker:
         Tries RADC phase interferometry first (if ball_speed_mph is provided),
         then falls back to PDAT distance-based detection.
         """
+        logger.info("[KLD7] Angle extraction: ball_speed=%s mph, buffer=%d frames",
+                     "%.1f" % ball_speed_mph if ball_speed_mph else "None", len(self._ring_buffer))
+
         if ball_speed_mph is not None:
             try:
                 radc_result = self._extract_ball_radc(ball_speed_mph)
                 if radc_result is not None:
                     return radc_result
+                logger.info("[KLD7] RADC extraction returned None, falling back to PDAT")
             except Exception as e:
-                logger.warning("K-LD7 RADC extraction failed, falling back to PDAT: %s", e)
+                logger.warning("[KLD7] RADC extraction failed, falling back to PDAT: %s", e, exc_info=True)
 
-        return self._extract_ball(shot_timestamp)
+        result = self._extract_ball(shot_timestamp)
+        if result:
+            logger.info("[KLD7] PDAT angle: %.1f° (conf=%.2f, %d frames)",
+                         result.vertical_deg or result.horizontal_deg, result.confidence, result.num_frames)
+        else:
+            logger.info("[KLD7] No angle detected (RADC and PDAT both failed)")
+        return result
 
     def get_club_angle(self, shot_timestamp: Optional[float] = None) -> Optional[KLD7Angle]:
         """Search the ring buffer for the club angle of attack.

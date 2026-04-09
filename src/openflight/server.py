@@ -369,12 +369,22 @@ def init_kld7(port=None, orientation="vertical", angle_offset_deg=0.0) -> bool:
         kld7_tracker = KLD7Tracker(port=port, orientation=orientation, angle_offset_deg=angle_offset_deg)
         if kld7_tracker.connect():
             kld7_tracker.start()
+            logger.info("[SERVER] K-LD7 initialized (port=%s, orientation=%s, offset=%.1f°)",
+                         port or "auto", orientation, angle_offset_deg)
+            session_log = get_session_logger()
+            if session_log:
+                session_log.log_connection(
+                    device="kld7",
+                    port=kld7_tracker.port or "auto",
+                    baud=3000000,
+                    radc_available=True,
+                )
             return True
         else:
             kld7_tracker = None
             return False
     except Exception as e:
-        logger.warning("K-LD7 initialization failed: %s", e)
+        logger.warning("[SERVER] K-LD7 initialization failed: %s", e, exc_info=True)
         kld7_tracker = None
         return False
 
@@ -841,8 +851,9 @@ def on_shot_detected(shot: Shot):
     """Callback when a shot is detected - emit to all clients."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
 
-    logger.debug("Shot callback triggered: %.1f mph", shot.ball_speed_mph)
+    logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
+    kld7_ms = None
     # Try K-LD7 angle radar first (highest priority for angle data)
     try:
         if kld7_tracker and shot.mode != "mock":
@@ -868,7 +879,7 @@ def on_shot_detected(shot: Shot):
                 )
                 if not radar_vertical_accepted:
                     logger.warning(
-                        "K-LD7 vertical angle %.1f° rejected for %s at %.1f mph: "
+                        "[SERVER] K-LD7 vertical angle %.1f° rejected for %s at %.1f mph: "
                         "expected %.1f° ± %.1f° (delta %.1f°)",
                         kld7_angle.vertical_deg,
                         shot.club.value,
@@ -883,8 +894,7 @@ def on_shot_detected(shot: Shot):
                     shot.launch_angle_confidence = kld7_angle.confidence
                     shot.angle_source = "radar"
                     logger.info(
-                        "K-LD7 %s angle: %.1f° (conf: %.0f%%, %d frames)",
-                        kld7_angle.detection_class or "vertical",
+                        "[SERVER] Angle source: radar (%.1f°, conf=%.0f%%, %d frames)",
                         kld7_angle.vertical_deg, kld7_angle.confidence * 100,
                         kld7_angle.num_frames,
                     )
@@ -894,7 +904,7 @@ def on_shot_detected(shot: Shot):
                         shot.angle_source = "radar"
                         shot.launch_angle_confidence = kld7_angle.confidence
                     logger.info(
-                        "K-LD7 horizontal angle: %.1f° (conf: %.0f%%)",
+                        "[SERVER] K-LD7 horizontal angle: %.1f° (conf: %.0f%%)",
                         kld7_angle.horizontal_deg, kld7_angle.confidence * 100,
                     )
             # Also get club angle of attack
@@ -902,7 +912,7 @@ def on_shot_detected(shot: Shot):
             if club_angle and club_angle.vertical_deg is not None:
                 shot.club_angle_deg = club_angle.vertical_deg
                 logger.info(
-                    "K-LD7 club angle: %.1f° (conf: %.0f%%)",
+                    "[SERVER] K-LD7 club angle: %.1f° (conf: %.0f%%)",
                     club_angle.vertical_deg, club_angle.confidence * 100,
                 )
 
@@ -933,9 +943,9 @@ def on_shot_detected(shot: Shot):
 
             kld7_tracker.reset()
             kld7_ms = (time.time() - kld7_start) * 1000
-            logger.info("[PERF] K-LD7 processing: %.1fms", kld7_ms)
+            logger.info("[SERVER] K-LD7 processing: %.1fms", kld7_ms)
     except Exception as e:
-        logger.warning("K-LD7 processing error: %s", e)
+        logger.warning("[SERVER] K-LD7 processing error: %s", e, exc_info=True)
 
     # Try to get launch angle from camera BEFORE emitting shot
     # Skip camera for mock shots — they already have simulated launch angle
@@ -959,7 +969,7 @@ def on_shot_detected(shot: Shot):
                     "launch_detected": camera_tracker.launch_detected,
                 }
                 logger.info(
-                    "Launch angle: %.1f° V, %.1f° H (conf: %.0f%%)",
+                    "[SERVER] Angle source: camera (%.1f° V, %.1f° H, conf=%.0f%%)",
                     launch_angle.vertical,
                     launch_angle.horizontal,
                     launch_angle.confidence * 100,
@@ -970,7 +980,7 @@ def on_shot_detected(shot: Shot):
             ball_detected = False
             ball_detection_confidence = 0.0
     except Exception as e:
-        logger.warning("Camera processing error: %s", e)
+        logger.warning("[SERVER] Camera processing error: %s", e, exc_info=True)
         camera_data = None
 
     # If no camera or radar launch angle, estimate from club type and ball speed
@@ -986,7 +996,7 @@ def on_shot_detected(shot: Shot):
         shot.launch_angle_confidence = estimated[1]
         shot.angle_source = "estimated"
         logger.info(
-            "Estimated launch angle: %.1f° (conf: %.0f%%)", estimated[0], estimated[1] * 100
+            "[SERVER] Angle source: estimated (%.1f°, conf=%.0f%%)", estimated[0], estimated[1] * 100
         )
 
     # Compute spin-adjusted carry using measured spin (if reliable) or club average
@@ -1005,7 +1015,7 @@ def on_shot_detected(shot: Shot):
             club_speed_mph=shot.club_speed_mph,
         )
         logger.info(
-            "Spin-adjusted carry: %.0f yds (spin: %.0f rpm%s)",
+            "[SERVER] Spin-adjusted carry: %.0f yds (spin: %.0f rpm%s)",
             shot.carry_spin_adjusted, spin_for_carry,
             "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
         )
@@ -1031,9 +1041,14 @@ def on_shot_detected(shot: Shot):
                 launch_angle_vertical=shot.launch_angle_vertical,
                 launch_angle_horizontal=shot.launch_angle_horizontal,
                 launch_angle_confidence=shot.launch_angle_confidence,
+                angle_source=shot.angle_source,
+                club_angle_deg=shot.club_angle_deg,
+                pipeline_ms={
+                    "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
+                },
             )
     except Exception as e:
-        logger.warning("Failed to log shot: %s", e)
+        logger.warning("[SERVER] Failed to log shot: %s", e, exc_info=True)
 
     # Emit shot with launch angle data included
     try:
@@ -1044,15 +1059,15 @@ def on_shot_detected(shot: Shot):
         # Log shot info
         angle_str = ""
         if shot.launch_angle_vertical is not None:
-            angle_str = f", Launch: {shot.launch_angle_vertical:.1f}°"
+            angle_str = ", Launch: %.1f°" % shot.launch_angle_vertical
         logger.info(
-            "Shot: ball=%.1f mph, carry=%.0f yds%s",
+            "[SERVER] Shot: ball=%.1f mph, carry=%.0f yds%s",
             shot.ball_speed_mph,
             shot.estimated_carry_yards,
             angle_str,
         )
     except Exception as e:
-        logger.error("Failed to emit shot: %s", e)
+        logger.error("[SERVER] Failed to emit shot: %s", e, exc_info=True)
         return
 
     # Debug logging (optional)
@@ -1123,6 +1138,9 @@ def start_monitor(
 
     monitor.connect()
 
+    logger.info("[SERVER] Starting monitor: mode=%s, trigger=%s, sample_rate=%dksps",
+                "mock" if mock else "rolling-buffer", trigger_type, sample_rate_ksps)
+
     # Start session logging
     session_logger = get_session_logger()
     if session_logger:
@@ -1136,6 +1154,13 @@ def start_monitor(
             mode="mock" if mock else "rolling-buffer",
             trigger_type=trigger_type if not mock else None,
         )
+        if not mock and radar_info:
+            session_logger.log_connection(
+                device="ops243",
+                port=port or "auto",
+                baud=getattr(monitor.radar, 'baud', 0) if hasattr(monitor, 'radar') else 0,
+                firmware=radar_info.get("Version"),
+            )
 
     if not mock:
 

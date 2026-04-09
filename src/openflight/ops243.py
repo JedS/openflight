@@ -229,7 +229,7 @@ class OPS243Radar:
         self.serial.reset_input_buffer()
 
         if drained > 0:
-            logger.info("Drained %d bytes of stale data from serial buffer", drained)
+            logger.info("[OPS] Drained %d bytes of stale data from serial buffer", drained)
 
     def _send_command(self, cmd: str) -> str:
         """
@@ -416,7 +416,7 @@ class OPS243Radar:
         else:
             cmd = "R|"
 
-        logger.info("Setting direction filter: %s", cmd)
+        logger.info("[OPS] Setting direction filter: %s", cmd)
         self._send_command(cmd)
 
     def enable_json_output(self, enabled: bool = True):
@@ -476,17 +476,17 @@ class OPS243Radar:
         # Max detectable speed ~208 mph (sufficient for golf, pros max ~190 mph)
         # Lower than 50ksps but better resolution tradeoff
         self.set_sample_rate(30000)
-        logger.info("Sample rate: 30ksps")
+        logger.info("[OPS] Sample rate: 30ksps")
 
         # 128 buffer per OmniPreSense recommendation
         # Combined with 30ksps gives good base for FFT
         self.set_buffer_size(128)
-        logger.info("Buffer size: 128")
+        logger.info("[OPS] Buffer size: 128")
 
         # FFT size 4096 (X=32 multiplier with 128 buffer)
         # This gives: ~56 Hz report rate, ±0.1 mph resolution
         self.set_fft_size(32)
-        logger.info("FFT size: 4096 (X=32) - ±0.1 mph resolution @ ~56 Hz")
+        logger.info("[OPS] FFT size: 4096 (X=32) - ±0.1 mph resolution @ ~56 Hz")
 
         # Enable magnitude to help filter weak signals
         # Magnitude helps distinguish club (larger RCS, higher mag) from ball
@@ -505,7 +505,7 @@ class OPS243Radar:
         # Minimum magnitude filter to reject weak signals (walking, noise)
         # Real golf shots have magnitude 100+, walking is typically 20-30
         self.set_magnitude_filter(min_mag=50)
-        logger.info("Minimum magnitude filter: 50")
+        logger.info("[OPS] Minimum magnitude filter: 50")
 
         # Max transmit power for best range
         self.set_transmit_power(0)
@@ -516,7 +516,7 @@ class OPS243Radar:
         # Enable multi-object reporting to detect both club head AND ball
         # O4 reports up to 4 objects per sample cycle, ordered by magnitude
         self.set_num_reports(4)
-        logger.info("Multi-object reporting enabled (O4)")
+        logger.info("[OPS] Multi-object reporting enabled (O4)")
 
         # Re-enable JSON output after O4 (in case it was reset)
         self.enable_json_output(True)
@@ -524,12 +524,12 @@ class OPS243Radar:
         # Enable peak speed averaging per OmniPreSense recommendation
         # Helps provide cleaner speed readings
         self.enable_peak_averaging(True)
-        logger.info("Peak averaging enabled (K+)")
+        logger.info("[OPS] Peak averaging enabled (K+)")
 
         # Verify settings were applied
-        logger.info("Verifying configuration...")
+        logger.info("[OPS] Verifying configuration...")
         filter_settings = self.get_speed_filter()
-        logger.info("Current filter settings: %s", filter_settings)
+        logger.info("[OPS] Current filter settings: %s", filter_settings)
 
     def enable_peak_averaging(self, enabled: bool = True):
         """
@@ -585,7 +585,7 @@ class OPS243Radar:
         else:
             cmd = f"O={num}"
 
-        logger.debug("Sending num_reports command: %s", cmd)
+        logger.debug("[OPS] Sending num_reports command: %s", cmd)
         self._send_command(cmd)
 
     def set_decimal_precision(self, places: int):
@@ -689,7 +689,7 @@ class OPS243Radar:
                 return None
 
             # Log raw data for debugging
-            raw_logger.debug(f"RAW: {line}")
+            raw_logger.debug("[OPS] RAW: %s", line)
 
             return self._parse_reading(line)
         except serial.SerialException as e:
@@ -754,7 +754,7 @@ class OPS243Radar:
                     print(f"[RAW] {speed:+.1f} mph -> {direction.value} (mag: {magnitude})")
 
                 # Log parsed reading for debugging
-                logger.debug(f"PARSED: raw_speed={speed:.2f} abs_speed={abs(speed):.2f} dir={direction.value} mag={magnitude}")
+                logger.debug("[OPS] PARSED: raw_speed=%.2f abs_speed=%.2f dir=%s mag=%s", speed, abs(speed), direction.value, magnitude)
 
                 return SpeedReading(
                     speed=abs(speed),
@@ -775,7 +775,7 @@ class OPS243Radar:
             if _show_raw_readings:
                 print(f"[RAW] {speed:+.1f} mph -> {direction.value}")
 
-            logger.debug(f"PARSED (plain): raw_speed={speed:.2f} abs_speed={abs(speed):.2f} dir={direction.value}")
+            logger.debug("[OPS] PARSED (plain): raw_speed=%.2f abs_speed=%.2f dir=%s", speed, abs(speed), direction.value)
 
             return SpeedReading(
                 speed=abs(speed),
@@ -784,7 +784,7 @@ class OPS243Radar:
                 unit=self._unit
             )
         except (ValueError, json.JSONDecodeError) as e:
-            logger.warning(f"Failed to parse reading: {line!r} - {e}")
+            logger.warning("[OPS] Failed to parse reading: %r - %s", line, e)
             return None
 
     def start_streaming(self, callback: Callable[[SpeedReading], None]):
@@ -867,7 +867,7 @@ class OPS243Radar:
             raise ConnectionError("Not connected to radar")
 
         print(f"[RADAR] Entering rolling buffer mode (S#{pre_trigger_segments}, S={sample_rate_ksps})...")
-        logger.info("Entering rolling buffer mode (pre_trigger_segments=%d)...",
+        logger.info("[OPS] Entering rolling buffer mode (pre_trigger_segments=%d)...",
                     pre_trigger_segments)
 
         # Clear any stale data
@@ -876,35 +876,35 @@ class OPS243Radar:
         # Step 1: Reset to idle for clean state
         self.serial.write(b"PI")
         time.sleep(0.2)
-        logger.debug("PI: reset to idle")
+        logger.debug("[OPS] PI: reset to idle")
 
         # Step 2: Enter rolling buffer mode
         self.serial.write(b"GC")
         time.sleep(0.1)
-        logger.debug("GC: rolling buffer mode")
+        logger.debug("[OPS] GC: rolling buffer mode")
 
         # Step 3: Activate sampling
         self.serial.write(b"PA")
         time.sleep(0.1)
-        logger.debug("PA: activate sampling")
+        logger.debug("[OPS] PA: activate sampling")
 
         # Step 4: Set sample rate - requires \r
         self.serial.write(f"S={sample_rate_ksps}\r".encode())
         self.serial.flush()
         time.sleep(0.15)
-        logger.debug("S=%d: %dksps sample rate", sample_rate_ksps, sample_rate_ksps)
+        logger.debug("[OPS] S=%d: %dksps sample rate", sample_rate_ksps, sample_rate_ksps)
 
         # Step 5: Set trigger split - requires \r
         pre_trigger_segments = max(0, min(32, pre_trigger_segments))
         self.serial.write(f"S#{pre_trigger_segments}\r".encode())
         self.serial.flush()
         time.sleep(0.15)
-        logger.debug("S#%d: pre-trigger segments", pre_trigger_segments)
+        logger.debug("[OPS] S#%d: pre-trigger segments", pre_trigger_segments)
 
         # Step 6: CRITICAL - Reactivate after settings changes
         self.serial.write(b"PA")
         time.sleep(0.1)
-        logger.debug("PA: reactivate sampling")
+        logger.debug("[OPS] PA: reactivate sampling")
 
         # Clear any response data from commands
         self.serial.reset_input_buffer()
@@ -915,7 +915,7 @@ class OPS243Radar:
         time.sleep(0.3)
 
         print(f"[RADAR] Rolling buffer mode ACTIVE (S#{pre_trigger_segments}, {sample_rate_ksps}ksps)")
-        logger.info("Rolling buffer mode active (S#%d, %dksps)",
+        logger.info("[OPS] Rolling buffer mode active (S#%d, %dksps)",
                     pre_trigger_segments, sample_rate_ksps)
 
     def enable_rolling_buffer(self):
@@ -927,7 +927,7 @@ class OPS243Radar:
         This method is kept for backwards compatibility but internally calls
         enter_rolling_buffer_mode() with default settings.
         """
-        logger.warning("enable_rolling_buffer() is deprecated, "
+        logger.warning("[OPS] enable_rolling_buffer() is deprecated, "
                        "use enter_rolling_buffer_mode() instead")
         self.enter_rolling_buffer_mode()
 
@@ -937,10 +937,10 @@ class OPS243Radar:
 
         After disabling, call configure_for_golf() to restore streaming settings.
         """
-        logger.info("Disabling rolling buffer mode...")
+        logger.info("[OPS] Disabling rolling buffer mode...")
         self._send_command("GS")  # Return to standard CW mode
         time.sleep(0.1)
-        logger.info("Rolling buffer mode disabled (returned to CW mode)")
+        logger.info("[OPS] Rolling buffer mode disabled (returned to CW mode)")
 
     def persist_rolling_buffer_mode(self, pre_trigger_segments: int = 16,
                                      sample_rate_ksps: int = 30):
@@ -968,7 +968,7 @@ class OPS243Radar:
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
 
-        logger.info("Persisting rolling buffer mode to flash memory...")
+        logger.info("[OPS] Persisting rolling buffer mode to flash memory...")
 
         # Enter rolling buffer mode with desired settings
         self.enter_rolling_buffer_mode(
@@ -980,7 +980,7 @@ class OPS243Radar:
         self.serial.write(b"A!")
         time.sleep(0.5)
 
-        logger.info("Rolling buffer mode saved to persistent memory. "
+        logger.info("[OPS] Rolling buffer mode saved to persistent memory. "
                      "Power cycle the board for changes to take effect.")
         print("[RADAR] Settings saved to persistent memory.")
         print("[RADAR] Power cycle the board (unplug USB, wait 3s, replug).")
@@ -1016,7 +1016,7 @@ class OPS243Radar:
         self.serial.write(f"S#{segments}\r".encode())
         self.serial.flush()
         time.sleep(0.15)
-        logger.info("Trigger split set to %s segments", segments)
+        logger.info("[OPS] Trigger split set to %s segments", segments)
 
         # CRITICAL: Reactivate sampling after changing settings
         # Per API doc: settings changes may interrupt the sampling loop
@@ -1026,7 +1026,7 @@ class OPS243Radar:
 
         # Clear any response data
         self.serial.reset_input_buffer()
-        logger.info("Sampling reactivated after trigger split change")
+        logger.info("[OPS] Sampling reactivated after trigger split change")
 
     def trigger_capture(self, timeout: float = 10.0) -> str:
         """
@@ -1094,10 +1094,12 @@ class OPS243Radar:
 
         # Only log issues, not normal operation
         if not full_response:
-            logger.info("S! returned empty response")
-        elif len(full_response) < 1000:
-            # Short response usually means mode not configured correctly
-            logger.info("S! response too short (%s bytes): %s", len(full_response), repr(full_response[:100]))
+            logger.warning("[OPS] S! trigger returned empty response after %.1fs", time.time() - start_time)
+        else:
+            logger.info("[OPS] S! trigger: %d bytes in %.1fs", len(full_response), time.time() - start_time)
+            if len(full_response) < 1000:
+                # Short response usually means mode not configured correctly
+                logger.info("[OPS] S! response too short (%s bytes): %s", len(full_response), repr(full_response[:100]))
 
         return full_response
 
@@ -1131,7 +1133,11 @@ class OPS243Radar:
                 chunk = self.serial.read(self.serial.in_waiting)
                 response_lines.append(chunk.decode('ascii', errors='ignore'))
                 bytes_received += len(chunk)
-                last_data_time = time.time()
+                if last_data_time is None:
+                    last_data_time = time.time()
+                    logger.debug("[OPS] Hardware trigger: first byte after %.1fs", last_data_time - start_time)
+                else:
+                    last_data_time = time.time()
 
                 # Check if we have complete I/Q data
                 full_response = ''.join(response_lines)
@@ -1156,9 +1162,9 @@ class OPS243Radar:
         full_response = ''.join(response_lines) if response_lines else ""
 
         if not full_response:
-            logger.info("Hardware trigger: no data received within %ss", timeout)
+            logger.info("[OPS] Hardware trigger: no data received within %.0fs", timeout)
         else:
-            logger.info("Hardware trigger: received %d bytes", len(full_response))
+            logger.info("[OPS] Hardware trigger: %d bytes in %.1fs", len(full_response), time.time() - start_time)
 
         return full_response
 
@@ -1180,7 +1186,19 @@ class OPS243Radar:
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
 
-        self.serial.reset_input_buffer()
+        # Drain the serial buffer until no new bytes arrive for 200ms.
+        # A full I/Q dump is ~41KB at 57600 baud (~7s). If the previous
+        # capture wasn't fully read, bytes are still streaming in.
+        # A single reset_input_buffer() only clears what's arrived so far.
+        drain_start = time.time()
+        total_drained = 0
+        while True:
+            total_drained += self.serial.in_waiting
+            self.serial.reset_input_buffer()
+            time.sleep(0.2)
+            if self.serial.in_waiting == 0:
+                break
+        logger.info("[OPS] Re-arm drain: %d bytes in %.1fs", total_drained, time.time() - drain_start)
 
         # Restart sampling
         self.serial.write(b"PA")
@@ -1199,7 +1217,7 @@ class OPS243Radar:
         time.sleep(0.15)
 
         self.serial.reset_input_buffer()
-        logger.debug("Rolling buffer re-armed (S#%d)", pre_trigger_segments)
+        logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
 
     def configure_for_rolling_buffer(self, pre_trigger_segments: int = 16, sample_rate_ksps: int = 30):
         """
@@ -1223,18 +1241,18 @@ class OPS243Radar:
         """
         # Set units to MPH first
         self.set_units(SpeedUnit.MPH)
-        logger.info("Units: MPH")
+        logger.info("[OPS] Units: MPH")
 
         # Reduced transmit power to avoid ADC saturation on close targets.
         # Level 0=max, 7=min. Rolling buffer captures raw I/Q at short range,
         # so max power clips the 12-bit ADC.
         self.set_transmit_power(3)
-        logger.info("Transmit power: level 3 (reduced to avoid clipping)")
+        logger.info("[OPS] Transmit power: level 3 (reduced to avoid clipping)")
 
         # Enter rolling buffer mode using the single source of truth
         self.enter_rolling_buffer_mode(pre_trigger_segments=pre_trigger_segments, sample_rate_ksps=sample_rate_ksps)
 
-        logger.info("Rolling buffer mode configured")
+        logger.info("[OPS] Rolling buffer mode configured")
 
     def configure_for_speed_trigger(self):
         """
@@ -1255,7 +1273,7 @@ class OPS243Radar:
         - ~5-6ms to switch to rolling buffer
         - Club to ball impact is 20-40ms, so we capture the ball
         """
-        logger.info("Configuring for fast speed trigger mode...")
+        logger.info("[OPS] Configuring for fast speed trigger mode...")
 
         # Start from clean state
         self._send_command("GS")  # Ensure CW mode (not rolling buffer)
@@ -1266,37 +1284,37 @@ class OPS243Radar:
 
         # Set units to MPH
         self.set_units(SpeedUnit.MPH)
-        logger.info("Units: MPH")
+        logger.info("[OPS] Units: MPH")
 
         # Max transmit power for best detection range
         self.set_transmit_power(0)
-        logger.info("Transmit power: max (P0)")
+        logger.info("[OPS] Transmit power: max (P0)")
 
         # 30ksps sample rate
         self.set_sample_rate(30000)
         time.sleep(0.1)
-        logger.info("Sample rate: 30ksps")
+        logger.info("[OPS] Sample rate: 30ksps")
 
         # 128 buffer size for fast report rate
         self.set_buffer_size(128)
         time.sleep(0.1)
-        logger.info("Buffer size: 128")
+        logger.info("[OPS] Buffer size: 128")
 
         # 256 FFT size (X=2) for ~150-200Hz report rate
         # Report rate = 30000 / 128 / 2 ≈ 117 Hz per spec, but empirically faster
         self.set_fft_size(2)
         time.sleep(0.1)
-        logger.info("FFT size: 256 (X=2) for fast reports")
+        logger.info("[OPS] FFT size: 256 (X=2) for fast reports")
 
         # Outbound only - ignore backswing (R-)
         self._send_command("R-")
         time.sleep(0.05)
-        logger.info("Direction filter: outbound only (R-)")
+        logger.info("[OPS] Direction filter: outbound only (R-)")
 
         # Minimum speed 20mph - ignore leg movement and slow movements
         self._send_command("R>20")
         time.sleep(0.05)
-        logger.info("Min speed filter: 20 mph (R>20)")
+        logger.info("[OPS] Min speed filter: 20 mph (R>20)")
 
         # Enable JSON output for parsing
         self.enable_json_output(True)
@@ -1311,11 +1329,11 @@ class OPS243Radar:
         # Activate
         self._send_command("PA")
         time.sleep(0.1)
-        logger.info("Speed trigger mode ready (PA)")
+        logger.info("[OPS] Speed trigger mode ready (PA)")
 
         # Verify settings
         response = self._send_command("S?")
-        logger.info("Settings: %s", response)
+        logger.info("[OPS] Settings: %s", response)
 
     def switch_to_rolling_buffer(self):
         """
