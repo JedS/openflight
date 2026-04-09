@@ -59,6 +59,7 @@ loki.process "openflight_json" {
       angle_source = "angle_source",
       club_aoa     = "club_angle_deg",
       club_path    = "club_path_deg",
+      spin_axis    = "spin_axis_deg",
     }
   }
 

@@ -14,6 +14,7 @@ export interface Shot {
   angle_source: 'radar' | 'camera' | 'estimated' | null;
   club_angle_deg: number | null;
   club_path_deg: number | null;
+  spin_axis_deg: number | null;
   // Rolling buffer mode spin data
   spin_rpm: number | null;
   spin_confidence: number | null;

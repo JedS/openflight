@@ -269,6 +269,7 @@ def shot_to_dict(shot: Shot) -> dict:
         "angle_source": shot.angle_source,
         "club_angle_deg": shot.club_angle_deg,
         "club_path_deg": shot.club_path_deg,
+        "spin_axis_deg": shot.spin_axis_deg,
         # Spin data from rolling buffer mode
         "spin_rpm": round(shot.spin_rpm) if shot.spin_rpm else None,
         "spin_confidence": round(shot.spin_confidence, 2) if shot.spin_confidence else None,
@@ -972,6 +973,12 @@ def on_shot_detected(shot: Shot):
 
                 kld7_horizontal.reset()
 
+            # Derive spin axis from face angle (H. launch) minus club path
+            if shot.launch_angle_horizontal is not None and shot.club_path_deg is not None:
+                shot.spin_axis_deg = round(shot.launch_angle_horizontal - shot.club_path_deg, 1)
+                logger.info("[SERVER] Spin axis: %+.1f° (face=%+.1f° - path=%+.1f°)",
+                             shot.spin_axis_deg, shot.launch_angle_horizontal, shot.club_path_deg)
+
             if kld7_vertical or kld7_horizontal:
                 kld7_ms = (time.time() - kld7_start) * 1000
                 logger.info("[SERVER] K-LD7 processing: %.1fms", kld7_ms)
@@ -1075,6 +1082,7 @@ def on_shot_detected(shot: Shot):
                 angle_source=shot.angle_source,
                 club_angle_deg=shot.club_angle_deg,
                 club_path_deg=shot.club_path_deg,
+                spin_axis_deg=shot.spin_axis_deg,
                 pipeline_ms={
                     "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
                 },
@@ -1361,6 +1369,7 @@ class MockLaunchMonitor:
             launch_angle_confidence=round(random.uniform(0.5, 0.95), 2),
             club_angle_deg=club_aoa,
             club_path_deg=round(random.uniform(-5.0, 5.0), 1),
+            spin_axis_deg=round(launch_h - random.uniform(-5.0, 5.0), 1),
             mode="mock",
         )
 

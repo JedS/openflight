@@ -200,6 +200,15 @@ export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
               variant="secondary"
             />
           )}
+          {shot.spin_axis_deg !== null && (
+            <MetricCard
+              value={(shot.spin_axis_deg >= 0 ? '+' : '') + shot.spin_axis_deg.toFixed(1)}
+              unit="°"
+              label="Spin Axis"
+              subtext={shot.spin_axis_deg > 2 ? 'fade' : shot.spin_axis_deg < -2 ? 'draw' : 'straight'}
+              variant="secondary"
+            />
+          )}
           {shot.launch_angle_horizontal !== null && (
             <MetricCard
               value={(shot.launch_angle_horizontal >= 0 ? '+' : '') + shot.launch_angle_horizontal.toFixed(1)}
