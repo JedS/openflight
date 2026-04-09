@@ -284,9 +284,9 @@ class RollingBufferMonitor:
                 pre_trigger_segments=pre_trigger_segments,
                 sample_rate_ksps=self.sample_rate_ksps,
             )
-            logger.info("Rolling buffer mode configured with S#%d, S=%d", pre_trigger_segments, self.sample_rate_ksps)
+            logger.info("[MONITOR] Rolling buffer mode configured with S#%d, S=%d", pre_trigger_segments, self.sample_rate_ksps)
         else:
-            logger.info("Using speed trigger - configuration deferred to trigger")
+            logger.info("[MONITOR] Using speed trigger — configuration deferred to trigger")
 
         return True
 
@@ -325,7 +325,7 @@ class RollingBufferMonitor:
         )
         self._capture_thread.start()
 
-        logger.info("Rolling buffer monitor started (trigger: %s)", self.trigger_type)
+        logger.info("[MONITOR] Rolling buffer monitor started (trigger: %s)", self.trigger_type)
 
     def stop(self):
         """Stop monitoring."""
@@ -333,7 +333,7 @@ class RollingBufferMonitor:
         if self._capture_thread:
             self._capture_thread.join(timeout=5.0)
             self._capture_thread = None
-        logger.info("Rolling buffer monitor stopped")
+        logger.info("[MONITOR] Rolling buffer monitor stopped")
 
     def _emit_diagnostics(self, wall_clock_ms: float = 0):
         """Drain trigger diagnostics and emit them to logger and UI."""
@@ -395,10 +395,10 @@ class RollingBufferMonitor:
                 process_start = time.time()
                 processed = self.processor.process_capture(capture)
                 process_ms = (time.time() - process_start) * 1000
-                logger.info("[PERF] process_capture: %.1fms", process_ms)
+                logger.info("[MONITOR] process_capture: %.1fms", process_ms)
 
                 if processed is None:
-                    logger.warning("Failed to process capture")
+                    logger.warning("[MONITOR] Failed to process capture")
                     # Emit diagnostic for processing failure
                     diag = {
                         "timestamp": capture.trigger_time if capture else 0,
@@ -434,10 +434,10 @@ class RollingBufferMonitor:
                     trigger_speed = self.trigger.last_trigger_speed
                     if trigger_speed > 0:
                         processed.club_speed_mph = trigger_speed
-                        logger.info(f"Using trigger speed as club speed: {trigger_speed:.1f} mph")
+                        logger.info("[MONITOR] Using trigger speed as club speed: %.1f mph", trigger_speed)
 
-                logger.debug(f"Processed: ball={processed.ball_speed_mph:.1f} mph, "
-                            f"club={processed.club_speed_mph}")
+                logger.debug("[MONITOR] Processed: ball=%.1f mph, club=%s",
+                            processed.ball_speed_mph, processed.club_speed_mph)
 
                 # Create shot
                 shot = self._create_shot(processed)
@@ -445,10 +445,10 @@ class RollingBufferMonitor:
                 if shot:
                     self._shots.append(shot)
                     logger.info(
-                        "Shot detected: ball=%.1f mph, club=%s, spin=%s",
+                        "[MONITOR] Shot detected: ball=%.1f mph, club=%s, spin=%s",
                         shot.ball_speed_mph,
-                        f"{shot.club_speed_mph:.1f}" if shot.club_speed_mph else "N/A",
-                        f"{shot.spin_rpm:.0f}" if shot.spin_rpm else "N/A"
+                        "%.1f" % shot.club_speed_mph if shot.club_speed_mph else "N/A",
+                        "%.0f" % shot.spin_rpm if shot.spin_rpm else "N/A"
                     )
 
                     # Log raw I/Q data and trigger events to session logger
@@ -533,14 +533,17 @@ class RollingBufferMonitor:
                         callback_ms = (time.time() - callback_start) * 1000
                         total_ms = (time.time() - trigger_start) * 1000
                         logger.info(
-                            "[PERF] shot_callback: %.1fms | total trigger-to-emit: %.1fms "
-                            "(trigger: %.1fms, process: %.1fms, callback: %.1fms)",
-                            callback_ms, total_ms,
-                            trigger_latency_ms, process_ms, callback_ms,
+                            "[SHOT] #%d: ball=%.1f mph, club=%s, carry=%s yds | "
+                            "trigger=%.0fms, process=%.0fms, callback=%.0fms, total=%.0fms",
+                            len(self._shots),
+                            shot.ball_speed_mph,
+                            "%.1f" % shot.club_speed_mph if shot.club_speed_mph else "N/A",
+                            "%.0f" % shot.estimated_carry_yards if shot.estimated_carry_yards else "N/A",
+                            trigger_latency_ms, process_ms, callback_ms, total_ms,
                         )
                 else:
                     logger.info(
-                        "Shot validation failed: ball=%.1f mph (min 15 mph)",
+                        "[MONITOR] Shot validation failed: ball=%.1f mph (min 15 mph)",
                         processed.ball_speed_mph if processed else 0
                     )
                     # Emit diagnostic for shot validation failure
@@ -578,7 +581,7 @@ class RollingBufferMonitor:
                 self.trigger.reset()
 
             except Exception as e:
-                logger.error(f"Capture loop error: {e}")
+                logger.error("[MONITOR] Capture loop error: %s", e, exc_info=True)
                 time.sleep(1.0)
 
     def _create_shot(self, processed: ProcessedCapture) -> Optional[Shot]:
@@ -593,7 +596,7 @@ class RollingBufferMonitor:
         """
         # Validate ball speed
         if processed.ball_speed_mph < 15:
-            logger.debug(f"Ball speed too low: {processed.ball_speed_mph:.1f} mph")
+            logger.debug("[MONITOR] Ball speed too low: %.1f mph", processed.ball_speed_mph)
             return None
 
         # Calculate carry distance

@@ -175,16 +175,16 @@ class PollingTrigger(TriggerStrategy):
 
                 if len(outbound) >= self.min_readings:
                     peak = max(r.speed_mph for r in outbound)
-                    logger.info(f"Activity detected: {len(outbound)} readings, peak {peak:.1f} mph")
+                    logger.info("[TRIGGER] Activity detected: %d readings, peak %.1f mph", len(outbound), peak)
                     return capture
 
                 time.sleep(self.poll_interval)
 
             except Exception as e:
-                logger.warning(f"Poll error: {e}")
+                logger.warning("[TRIGGER] Poll error: %s", e, exc_info=True)
                 time.sleep(self.poll_interval)
 
-        logger.info("Polling trigger timeout")
+        logger.info("[TRIGGER] Polling trigger timeout")
         return None
 
     def reset(self):
@@ -258,8 +258,8 @@ class ThresholdTrigger(TriggerStrategy):
 
                 peak = timeline.peak_speed
                 if peak and peak.is_outbound and peak.speed_mph >= self.speed_threshold_mph:
-                    logger.info(f"Threshold triggered: {peak.speed_mph:.1f} mph "
-                               f">= {self.speed_threshold_mph} mph")
+                    logger.info("[TRIGGER] Threshold triggered: %.1f mph >= %.1f mph",
+                               peak.speed_mph, self.speed_threshold_mph)
                     self._triggered = True
 
                     # Brief settling time for ball to clear
@@ -275,10 +275,10 @@ class ThresholdTrigger(TriggerStrategy):
                 time.sleep(self.check_interval)
 
             except Exception as e:
-                logger.warning(f"Threshold check error: {e}")
+                logger.warning("[TRIGGER] Threshold check error: %s", e, exc_info=True)
                 time.sleep(self.check_interval)
 
-        logger.info("Threshold trigger timeout")
+        logger.info("[TRIGGER] Threshold trigger timeout")
         return None
 
     def reset(self):
@@ -314,7 +314,7 @@ class ManualTrigger(TriggerStrategy):
         while (time.time() - start_time) < timeout:
             if self._trigger_requested:
                 self._trigger_requested = False
-                logger.info("Manual trigger activated")
+                logger.info("[TRIGGER] Manual trigger activated")
 
                 response = radar.trigger_capture(timeout=10.0)
                 radar.rearm_rolling_buffer(self.pre_trigger_segments)
@@ -322,7 +322,7 @@ class ManualTrigger(TriggerStrategy):
 
             time.sleep(0.1)
 
-        logger.info("Manual trigger timeout")
+        logger.info("[TRIGGER] Manual trigger timeout")
         return None
 
     def reset(self):
@@ -404,7 +404,7 @@ class SpeedTriggeredCapture(TriggerStrategy):
             time.sleep(0.1)
 
         start_time = time.time()
-        logger.info(f"Waiting for speed trigger >= {self.min_trigger_speed_mph} mph...")
+        logger.info("[TRIGGER] Waiting for speed trigger >= %.1f mph...", self.min_trigger_speed_mph)
 
         while (time.time() - start_time) < timeout:
             # Non-blocking speed read
@@ -415,10 +415,8 @@ class SpeedTriggeredCapture(TriggerStrategy):
                 self._last_trigger_speed = reading.speed
                 trigger_time = time.time()
 
-                logger.info(f"Trigger: {reading.speed:.1f} mph detected, "
-                           f"switching to rolling buffer...")
-                logger.info(f"{reading.speed:.1f} mph {reading.direction.value} - "
-                            f"switching to rolling buffer")
+                logger.info("[TRIGGER] Speed trigger: %.1f mph %s detected, switching to rolling buffer...",
+                           reading.speed, reading.direction.value)
 
                 # Immediately switch to rolling buffer mode
                 radar.switch_to_rolling_buffer()
@@ -435,7 +433,7 @@ class SpeedTriggeredCapture(TriggerStrategy):
                 # Calculate timing
                 capture_time = time.time()
                 total_delay_ms = (capture_time - trigger_time) * 1000
-                logger.info("Buffer captured %.1fms after trigger", total_delay_ms)
+                logger.info("[TRIGGER] Buffer captured %.1fms after trigger", total_delay_ms)
 
                 if capture:
                     # Validate capture has ball speed
@@ -445,15 +443,13 @@ class SpeedTriggeredCapture(TriggerStrategy):
 
                     if outbound:
                         peak = max(r.speed_mph for r in outbound)
-                        logger.info("Ball detected: %.1f mph in capture", peak)
-                        logger.info(f"Ball detected: {peak:.1f} mph")
+                        logger.info("[TRIGGER] Ball detected: %.1f mph in capture", peak)
 
                         # Mark for reconfigure on next call
                         self._needs_reconfigure = True
                         return capture
                     else:
-                        logger.info("No speed >= %.1f mph in capture", self.min_ball_speed_mph)
-                        logger.warning("No ball speed found in capture")
+                        logger.info("[TRIGGER] No speed >= %.1f mph in capture", self.min_ball_speed_mph)
 
                 # Reconfigure for speed mode and continue
                 self._needs_reconfigure = True
@@ -464,7 +460,7 @@ class SpeedTriggeredCapture(TriggerStrategy):
             # Brief sleep to avoid busy-waiting but stay responsive
             time.sleep(0.002)  # 2ms = 500Hz poll rate
 
-        logger.info("Speed trigger timeout")
+        logger.info("[TRIGGER] Speed trigger timeout")
         return None
 
     def reset(self):
@@ -533,7 +529,7 @@ class GPIOSoundTrigger(TriggerStrategy):
         try:
             from gpiozero import Button  # pylint: disable=import-outside-toplevel
         except ImportError:
-            logger.error("gpiozero not available. Install with: uv pip install gpiozero lgpio")
+            logger.error("[TRIGGER] gpiozero not available. Install with: uv pip install gpiozero lgpio")
             return False
 
         def on_trigger():
@@ -549,7 +545,7 @@ class GPIOSoundTrigger(TriggerStrategy):
         self._gpio_initialized = True
 
         logger.info(
-            "GPIO%d configured for sound trigger (debounce=%dms)",
+            "[TRIGGER] GPIO%d configured for sound trigger (debounce=%dms)",
             self.gpio_pin, self.debounce_ms
         )
         return True
@@ -570,11 +566,11 @@ class GPIOSoundTrigger(TriggerStrategy):
         the SEN-14262 GATE signal, then sends S! to trigger the capture.
         """
         if not self._init_gpio():
-            logger.error("GPIO initialization failed")
+            logger.error("[TRIGGER] GPIO initialization failed")
             return None
 
         logger.info(
-            "Waiting for GPIO sound trigger on GPIO%d (timeout=%ss, S#%s)...",
+            "[TRIGGER] Waiting for GPIO sound trigger on GPIO%d (timeout=%.0fs, S#%s)...",
             self.gpio_pin, timeout, self.pre_trigger_segments
         )
 
@@ -588,12 +584,12 @@ class GPIOSoundTrigger(TriggerStrategy):
 
                 # Measure edge-to-S! latency (from GPIO callback to now)
                 trigger_latency = (time.time() - edge_time) * 1000
-                logger.info("GPIO edge detected on GPIO%d (%.1fms ago), sending S! trigger...",
+                logger.info("[TRIGGER] GPIO edge detected on GPIO%d (%.1fms ago), sending S! trigger...",
                            self.gpio_pin, trigger_latency)
                 response = radar.trigger_capture(timeout=5.0)
 
                 if not response:
-                    logger.warning("No response from radar after S! (%.1fms after edge)",
+                    logger.warning("[TRIGGER] No response from radar after S! (%.1fms after edge)",
                                   trigger_latency)
                     self._append_diagnostic(
                         accepted=False,
@@ -602,25 +598,27 @@ class GPIOSoundTrigger(TriggerStrategy):
                         trigger_latency_ms=trigger_latency,
                     )
                     radar.rearm_rolling_buffer(self.pre_trigger_segments)
+                    logger.debug("[TRIGGER] Discarding GPIO edges during re-arm")
                     self._trigger_event["triggered"] = False  # discard edges during rearm
                     continue
 
                 response_len = len(response)
-                logger.info("Capture received, %d bytes (S! sent %.1fms after edge)",
+                logger.info("[TRIGGER] Capture received, %d bytes (S! sent %.1fms after edge)",
                            response_len, trigger_latency)
                 if response_len < 5000:
-                    logger.debug("Response content: %s", repr(response))
+                    logger.debug("[TRIGGER] Response content: %s", repr(response))
                 else:
-                    logger.debug("Response preview: %s...", repr(response[:500]))
+                    logger.debug("[TRIGGER] Response preview: %s...", repr(response[:500]))
 
                 # Re-arm for next capture
                 radar.rearm_rolling_buffer(self.pre_trigger_segments)
+                logger.debug("[TRIGGER] Discarding GPIO edges during re-arm")
                 self._trigger_event["triggered"] = False  # discard edges during rearm
 
                 capture = processor.parse_capture(response)
 
                 if not capture:
-                    logger.warning("Failed to parse capture (%d bytes)", response_len)
+                    logger.warning("[TRIGGER] Failed to parse capture (%d bytes)", response_len)
                     self._append_diagnostic(
                         accepted=False,
                         reason="parse_failed",
@@ -650,11 +648,9 @@ class GPIOSoundTrigger(TriggerStrategy):
 
                 if not outbound_valid:
                     logger.info(
-                        "GPIO trigger REJECTED: no swing >= 15 mph. "
-                        "Total readings: %d, outbound: %d (peak %.1f mph), "
-                        "inbound: %d (peak %.1f mph). Re-arming...",
-                        len(all_readings), len(all_outbound), peak_outbound,
-                        len(all_inbound), peak_inbound
+                        "[TRIGGER] GPIO trigger rejected — no outbound speed >= 15 mph "
+                        "(peak=%.1f mph, %d readings)",
+                        peak_outbound, len(all_readings)
                     )
                     self._append_diagnostic(
                         accepted=False,
@@ -675,9 +671,8 @@ class GPIOSoundTrigger(TriggerStrategy):
 
                 peak = max(r.speed_mph for r in outbound_valid)
                 logger.info(
-                    "GPIO trigger ACCEPTED: %d outbound readings >= 15 mph, "
-                    "peak %.1f mph (S! sent %.1fms after edge)",
-                    len(outbound_valid), peak, trigger_latency
+                    "[TRIGGER] GPIO trigger accepted — peak %.1f mph, %d outbound readings",
+                    peak, len(outbound_valid)
                 )
                 self._append_diagnostic(
                     accepted=True,
@@ -699,7 +694,7 @@ class GPIOSoundTrigger(TriggerStrategy):
 
             time.sleep(0.001)  # 1ms poll interval — latency-critical path
 
-        logger.info("GPIO sound trigger timeout - no trigger received")
+        logger.info("[TRIGGER] GPIO sound trigger timeout — no trigger received")
         return None
 
     def reset(self):
@@ -767,18 +762,18 @@ class SoundTrigger(TriggerStrategy):
         We just block on serial read waiting for the I/Q data to arrive.
         """
         logger.info(
-            "Waiting for hardware sound trigger (timeout=%ss)...",
+            "[TRIGGER] Waiting for sound trigger (timeout=%.0fs)...",
             timeout
         )
 
         response = radar.wait_for_hardware_trigger(timeout=timeout)
 
         if not response:
-            logger.info("Sound trigger timeout - no hardware trigger received")
+            logger.info("[TRIGGER] Sound trigger timeout — no hardware trigger received")
             return None
 
         response_len = len(response)
-        logger.info("Hardware trigger fired, received %d bytes", response_len)
+        logger.info("[TRIGGER] Sound trigger fired, %d bytes received", response_len)
 
         # Re-arm for next capture
         radar.rearm_rolling_buffer(self.pre_trigger_segments)
@@ -786,6 +781,7 @@ class SoundTrigger(TriggerStrategy):
         capture = processor.parse_capture(response)
 
         if not capture:
+            logger.warning("[TRIGGER] Sound trigger parse failed (%d bytes received)", response_len)
             self._append_diagnostic(
                 accepted=False,
                 reason="parse_failed",
@@ -814,7 +810,8 @@ class SoundTrigger(TriggerStrategy):
         outbound_valid = [r for r in all_outbound if r.speed_mph >= 15.0]
 
         if not outbound_valid:
-            logger.info("Sound trigger: no swing detected in capture, re-arming")
+            logger.info("[TRIGGER] Sound trigger rejected — no outbound speed >= 15 mph (peak=%.1f mph, %d readings)",
+                       peak_outbound, len(all_readings))
             self._append_diagnostic(
                 accepted=False,
                 reason="no_outbound_speed",
@@ -832,8 +829,8 @@ class SoundTrigger(TriggerStrategy):
             return None
 
         peak = max(r.speed_mph for r in outbound_valid)
-        logger.info("Sound trigger capture: %d readings, peak %.1f mph",
-                   len(outbound_valid), peak)
+        logger.info("[TRIGGER] Sound trigger accepted — peak %.1f mph, %d outbound readings",
+                   peak, len(outbound_valid))
         self._append_diagnostic(
             accepted=True,
             reason="accepted",

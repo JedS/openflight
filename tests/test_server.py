@@ -387,7 +387,7 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None):
+            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
                 calls.append(("ball", shot_timestamp))
                 return KLD7Angle(vertical_deg=12.0, confidence=0.8, num_frames=2)
 
@@ -428,7 +428,7 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None):
+            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
                 return KLD7Angle(vertical_deg=79.4, confidence=0.58, num_frames=1)
 
             def get_club_angle(self, shot_timestamp=None):
@@ -464,7 +464,7 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None):
+            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
                 return KLD7Angle(vertical_deg=18.7, confidence=0.8, num_frames=2)
 
             def get_club_angle(self, shot_timestamp=None):

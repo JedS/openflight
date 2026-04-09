@@ -157,6 +157,23 @@ class SessionLogger:
 
         return self._session_id
 
+    def log_connection(self, device: str, port: str, baud: int = 0,
+                       firmware: str = None, radc_available: bool = None, **kwargs):
+        """Log device connection details."""
+        if not self.enabled:
+            return
+        entry = {
+            "device": device,
+            "port": port,
+            "baud": baud,
+        }
+        if firmware:
+            entry["firmware"] = firmware
+        if radc_available is not None:
+            entry["radc_available"] = radc_available
+        entry.update(kwargs)
+        self._write_entry("connection", entry)
+
     def _setup_raw_logging(self):
         """Configure Python logging for raw radar data."""
         # Remove existing handlers
@@ -263,6 +280,9 @@ class SessionLogger:
         launch_angle_vertical: Optional[float] = None,
         launch_angle_horizontal: Optional[float] = None,
         launch_angle_confidence: Optional[float] = None,
+        angle_source: Optional[str] = None,
+        club_angle_deg: Optional[float] = None,
+        pipeline_ms: Optional[Dict] = None,
     ):
         """
         Log a detected shot with all metrics.
@@ -287,7 +307,7 @@ class SessionLogger:
 
         self._stats["shots_detected"] += 1
 
-        self._write_entry("shot_detected", {
+        data = {
             "shot_number": self._stats["shots_detected"],
             "ball_speed_mph": ball_speed_mph,
             "club_speed_mph": club_speed_mph,
@@ -305,7 +325,16 @@ class SessionLogger:
             "launch_angle_vertical": launch_angle_vertical,
             "launch_angle_horizontal": launch_angle_horizontal,
             "launch_angle_confidence": launch_angle_confidence,
-        })
+        }
+
+        if angle_source is not None:
+            data["angle_source"] = angle_source
+        if club_angle_deg is not None:
+            data["club_angle_deg"] = club_angle_deg
+        if pipeline_ms is not None:
+            data["pipeline_ms"] = pipeline_ms
+
+        self._write_entry("shot_detected", data)
 
     def log_camera_data(
         self,

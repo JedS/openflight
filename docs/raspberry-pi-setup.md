@@ -15,7 +15,7 @@ Make sure you have all the hardware. See the **[Parts List](PARTS.md)** for what
 - SparkFun SEN-14262 sound detector (wired per the [Sound Trigger Wiring Guide](sound-trigger-wiring.md))
 
 **Optional:**
-- K-LD7 + EVAL Board (×2) — for launch angle and club path
+- K-LD7 + FTDI adapter (×2) — for launch angle and club path (see [Parts List](PARTS.md))
 
 ## Initial Setup
 
@@ -77,7 +77,30 @@ Make a sound near the SEN-14262 — you should see trigger data with I/Q samples
 
 ## K-LD7 Angle Radar Setup
 
-Each K-LD7 EVAL board connects via USB and appears as `/dev/ttyUSB*`.
+Each K-LD7 connects via a 3.3V FTDI USB-to-serial adapter and appears as `/dev/ttyUSB*`.
+
+### Stable Device Names (udev rules)
+
+USB serial devices can swap between `/dev/ttyUSB0` and `/dev/ttyUSB1` after a reboot depending on enumeration order. To assign fixed names based on each FTDI adapter's unique serial number:
+
+```bash
+# Find the serial numbers for each adapter
+udevadm info -a /dev/ttyUSB0 | grep '{serial}' | head -1
+udevadm info -a /dev/ttyUSB1 | grep '{serial}' | head -1
+```
+
+Create a udev rule with the serial numbers:
+
+```bash
+sudo tee /etc/udev/rules.d/99-kld7.rules << 'EOF'
+SUBSYSTEM=="tty", ATTRS{serial}=="FTXXXXXX", SYMLINK+="kld7_vertical"
+SUBSYSTEM=="tty", ATTRS{serial}=="FTYYYYYY", SYMLINK+="kld7_horizontal"
+EOF
+
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Replace `FTXXXXXX` and `FTYYYYYY` with the actual serial numbers. Now the radars are always at `/dev/kld7_vertical` and `/dev/kld7_horizontal` regardless of plug order.
 
 ### Mounting
 
@@ -88,14 +111,17 @@ Both should be positioned near the OPS243-A, 3-5 feet behind the tee.
 
 ### Angle Offset Calibration
 
-The K-LD7 often reads angles ~10-15° lower than expected due to mounting geometry (sensor height relative to ball flight). Correct this with the `--kld7-angle-offset` flag:
+The raw RADC angle needs an offset to match real launch angles. The offset depends on your mounting geometry (sensor height, angle, distance from ball).
 
-1. Start a session with `--kld7 --kld7-angle-offset 13`
-2. Hit 5-10 shots with a known club
-3. Compare reported launch angles to expected values for that club
-4. Adjust the offset up or down until angles look right
+1. Start a session with `--kld7 --kld7-angle-offset 8`
+2. Hit 5-10 shots with a known club (7-iron recommended)
+3. Compare reported launch angles to expected values:
+   - Wedge: 24-30°, 7-iron: 16-18°, 5-iron: 12-14°, Driver: 10-14°
+4. Adjust the offset: if angles read 5° too low, increase offset by 5
 
-Typical offsets are 10-15°. The exact value depends on your mounting position.
+Typical offsets are 5-10°. The exact value depends on your mounting position.
+
+See [K-LD7 Troubleshooting](kld7-troubleshooting.md) for more details.
 
 ## Running OpenFlight
 
@@ -106,7 +132,7 @@ Typical offsets are 10-15°. The exact value depends on your mounting position.
 ./scripts/start-kiosk.sh
 
 # With K-LD7 angle radar
-./scripts/start-kiosk.sh --kld7 --kld7-angle-offset 13
+./scripts/start-kiosk.sh --kld7 --kld7-angle-offset 8
 
 # Mock mode (no hardware needed)
 ./scripts/start-kiosk.sh --mock
@@ -183,13 +209,13 @@ See the [Sound Trigger Wiring Guide — Troubleshooting](sound-trigger-wiring.md
 
 ```bash
 # Check USB devices
-ls /dev/ttyUSB*
+ls /dev/ttyUSB* /dev/kld7_*
 
 # Test standalone
 uv run python scripts/test_kld7.py
 ```
 
-Look for `K-LD7 connected on /dev/ttyUSB...` in the server logs.
+Look for `[KLD7] Connected on /dev/ttyUSB...` in the server logs. See [K-LD7 Troubleshooting](kld7-troubleshooting.md) for "Wrong length reply" and other connection issues.
 
 ### Service Won't Start
 
@@ -223,7 +249,7 @@ Use `DISPLAY=:0` prefix for commands that need the Pi's display.
 ```bash
 ./scripts/start-kiosk.sh                                      # Default
 ./scripts/start-kiosk.sh --mock                                # No hardware
-./scripts/start-kiosk.sh --kld7 --kld7-angle-offset 13        # With angle radar
+./scripts/start-kiosk.sh --kld7 --kld7-angle-offset 8          # With angle radar
 ./scripts/start-kiosk.sh --port 3000                           # Custom port
 ```
 

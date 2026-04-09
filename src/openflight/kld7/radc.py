@@ -420,12 +420,20 @@ def extract_launch_angle(
         angle_std = float(np.std(clean_angs))
         avg_snr = float(np.mean(clean_snrs))
 
-        # Confidence: tight angle spread + high SNR + multiple frames
+        # Confidence based primarily on SNR. For RADC, single-frame
+        # detection is the expected case (ball transits in ~56ms at 18 FPS),
+        # so frame count shouldn't penalize confidence. Multi-frame
+        # detections get a bonus from angle consistency.
         frame_count = len(clean_angs)
-        std_score = max(0.0, 1.0 - angle_std / 15.0) if len(clean_angs) > 1 else 0.5
         snr_score = min(avg_snr / 10.0, 1.0)
-        frame_score = min(frame_count / 3.0, 1.0)
-        confidence = round(std_score * 0.4 + snr_score * 0.3 + frame_score * 0.3, 2)
+        if frame_count == 1:
+            # Single frame: confidence driven by SNR alone
+            # SNR 5 → 0.50, SNR 10 → 0.75, SNR 15+ → 0.90
+            confidence = round(0.40 + snr_score * 0.50, 2)
+        else:
+            # Multi-frame: SNR + angle consistency bonus
+            std_score = max(0.0, 1.0 - angle_std / 15.0)
+            confidence = round(snr_score * 0.5 + std_score * 0.3 + min(frame_count / 3.0, 1.0) * 0.2, 2)
 
         results.append({
             "shot_index": shot_idx,

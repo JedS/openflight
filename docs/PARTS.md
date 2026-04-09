@@ -46,15 +46,17 @@ Two K-LD7 modules measure launch angle (vertical) and club path / aim direction 
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
-| **RFbeam K-LD7 (×2)** | 24 GHz FMCW radar for angle + distance | [RFbeam](https://rfbeam.ch/product/k-ld7-radar-transceiver/) | ~$160 |
-| **K-LD7 EVAL Board (×2)** | USB evaluation board for K-LD7 (FTDI serial) | [RFbeam](https://rfbeam.ch/product/k-ld7-eval-board/) | ~$240 |
+| **RFbeam K-LD7 (×2)** | 24 GHz FMCW radar for angle + distance | [RFbeam](https://rfbeam.ch/product/k-ld7-radar-transceiver/) | ~$60 ea |
+| **FTDI USB-to-Serial adapter (×2)** | 3.3V FTDI board for K-LD7 UART (e.g. FT232RL) | [Amazon](https://www.amazon.com/s?k=ftdi+3.3v+usb+serial) | ~$10 |
+
+> **EVAL board not required.** The K-LD7 bare module communicates over 3.3V UART (TX, RX, VCC, GND). Any 3.3V FTDI USB-to-serial adapter works. The official K-LD7 EVAL board (~$120 each) is only needed if you want the RFbeam GUI software for configuration — OpenFlight configures the radar over serial automatically.
 
 ### K-LD7 Connection
 
-Each EVAL board connects via USB (FTDI serial), appearing as `/dev/ttyUSB*` on Linux.
+Each K-LD7 connects via a 3.3V FTDI adapter, appearing as `/dev/ttyUSB*` on Linux.
 
 ```
-K-LD7 Module → K-LD7 EVAL Board → USB → Raspberry Pi
+K-LD7 Module (UART) → FTDI 3.3V Adapter → USB → Raspberry Pi
 ```
 
 One unit is mounted vertically (launch angle), one horizontally (club path / aim direction). A `--kld7-angle-offset` parameter corrects for mounting geometry — see the [setup guide](raspberry-pi-setup.md) for calibration.
@@ -81,8 +83,8 @@ One unit is mounted vertically (launch angle), one horizontally (club path / aim
 |----------|--------|
 | Core (OPS243-A, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
-| Angle Radar (2× K-LD7 + EVAL boards) | $400 |
+| Angle Radar (2× K-LD7 + FTDI adapters) | $140 |
 | Power & Accessories | $27 |
-| **Total** | **~$800** |
+| **Total** | **~$540** |
 
 > The angle radar is the most expensive component. OpenFlight works without it — you'll get ball speed, club speed, smash factor, and estimated carry. The K-LD7s add measured launch angle and club path data.

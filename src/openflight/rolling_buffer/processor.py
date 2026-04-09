@@ -151,7 +151,7 @@ class RollingBufferProcessor:
             else:
                 response_preview = repr(response[:500]) + "..."
             logger.warning(
-                "Incomplete capture (missing: %s). Response (%d bytes): %s",
+                "[PROCESSOR] Incomplete capture (missing: %s). Response (%d bytes): %s",
                 ", ".join(missing),
                 len(response),
                 response_preview,
@@ -159,7 +159,7 @@ class RollingBufferProcessor:
             return None
 
         except Exception as e:
-            logger.error(f"Failed to parse capture: {e}")
+            logger.error("[PROCESSOR] Failed to parse capture: %s", e, exc_info=True)
             return None
 
     def _find_peaks(
@@ -605,6 +605,11 @@ class RollingBufferProcessor:
         frequent.sort(key=lambda x: x[0], reverse=True)
         ball_bin = frequent[0][0]
 
+        # Log if max speed differs significantly from mode (outlier rejected)
+        max_speed = max(speeds)
+        if max_speed > ball_bin + 10:
+            logger.info("[PROCESSOR] Ball speed outlier rejected: max=%.1f, mode=%.1f mph (%d occurrences)", max_speed, float(ball_bin), frequent[0][1])
+
         # Return the actual max speed within ±2 mph of the mode bin
         # for sub-mph precision
         nearby = [s for s in speeds if abs(s - ball_bin) <= 2.0]
@@ -628,16 +633,17 @@ class RollingBufferProcessor:
         standard = self.process_standard(capture)
         std_outbound = [r for r in standard.readings if r.is_outbound]
         if not std_outbound:
-            logger.warning("No outbound readings found")
+            logger.warning("[PROCESSOR] No outbound readings found")
             return None
 
         ball_speed_mph = self._find_consistent_ball_speed(std_outbound)
+        logger.info("[PROCESSOR] Ball speed: %.1f mph (mode-based, %d outbound readings)", ball_speed_mph, len(std_outbound))
 
         # Process with overlapping FFT for high-resolution timeline (needed for spin)
         timeline = self.process_overlapping(capture)
 
         if not timeline.readings:
-            logger.warning("No valid readings extracted from capture")
+            logger.warning("[PROCESSOR] No valid readings extracted from capture")
             return None
 
         # Find the ball in the overlapping timeline at the standard-detected speed
@@ -661,6 +667,10 @@ class RollingBufferProcessor:
         club_speed_mph, club_timestamp_ms = self.find_club_speed(
             timeline, ball_speed_mph, ball_timestamp_ms
         )
+        if club_speed_mph is not None:
+            logger.info("[PROCESSOR] Club speed: %.1f mph at %.1fms before ball", club_speed_mph, ball_timestamp_ms - club_timestamp_ms)
+        else:
+            logger.debug("[PROCESSOR] No club speed found (ball=%.1f mph)", ball_speed_mph)
 
         # Try spin detection
         ball_speeds = self.extract_ball_speeds(
@@ -669,7 +679,7 @@ class RollingBufferProcessor:
         spin = self.detect_spin(ball_speeds, timeline.sample_rate_hz)
 
         logger.info(
-            "Spin analysis: %d ball speed samples in %.0f-%.0fms window, "
+            "[PROCESSOR] Spin analysis: %d ball speed samples in %.0f-%.0fms window, "
             "sample_rate=%.0f Hz, spin=%.0f RPM, snr=%.2f, quality=%s",
             len(ball_speeds),
             ball_timestamp_ms, ball_timestamp_ms + 50,
