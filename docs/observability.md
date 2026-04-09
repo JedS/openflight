@@ -11,7 +11,7 @@ Session Logs (JSONL)  →  Grafana Alloy  →  Grafana Cloud Loki  →  Grafana 
 
 - **What gets shipped**: Every JSONL entry — session start/end, shot data (ball speed, club speed, spin, launch angle, carry), trigger events, I/Q readings
 - **Labels**: `app=openflight`, `host=<hostname>`, `log_type` (shot_detected, session_start, etc.), `mode`, `club`
-- **Extracted fields**: `ball_speed`, `club_speed`, `carry`, `spin_rpm`, `launch_v`, `launch_h`, `shot_number`
+- **Extracted fields**: `ball_speed`, `club_speed`, `carry`, `spin_rpm`, `launch_v`, `launch_h`, `angle_source`, `club_aoa`, `club_path`, `shot_number`
 - **Buffering**: Local WAL (write-ahead log) buffers during network outages
 
 ## Setup
@@ -127,7 +127,8 @@ OpenFlight writes JSONL files to `~/openflight_sessions/session_<timestamp>_<mod
 |---|---|---|
 | `session_start` | Session began | `mode`, `camera_enabled`, `sample_rate` |
 | `session_end` | Session ended | `duration_seconds`, `total_shots` |
-| `shot_detected` | A shot was detected | `ball_speed_mph`, `club_speed_mph`, `spin_rpm`, `launch_angle_vertical`, `estimated_carry_yards` |
+| `shot_detected` | A shot was detected | `ball_speed_mph`, `club_speed_mph`, `spin_rpm`, `launch_angle_vertical`, `launch_angle_horizontal`, `angle_source`, `club_angle_deg`, `club_path_deg`, `estimated_carry_yards` |
+| `connection` | Device connected | `device`, `port`, `baud`, `firmware`, `radc_available`, `base_freq` |
 | `trigger_event` | Trigger accepted/rejected | `accepted`, `latency_ms`, `trigger_type` |
 | `rolling_buffer_capture` | Raw I/Q capture | `num_samples`, `sample_rate` |
 

@@ -46,16 +46,19 @@ loki.process "openflight_json" {
   // Parse JSON to extract fields for labels and structured metadata
   stage.json {
     expressions = {
-      log_type    = "type",
-      mode        = "mode",
-      club        = "club",
-      shot_number = "shot_number",
-      ball_speed  = "ball_speed_mph",
-      club_speed  = "club_speed_mph",
-      carry       = "estimated_carry_yards",
-      spin_rpm    = "spin_rpm",
-      launch_v    = "launch_angle_vertical",
-      launch_h    = "launch_angle_horizontal",
+      log_type     = "type",
+      mode         = "mode",
+      club         = "club",
+      shot_number  = "shot_number",
+      ball_speed   = "ball_speed_mph",
+      club_speed   = "club_speed_mph",
+      carry        = "estimated_carry_yards",
+      spin_rpm     = "spin_rpm",
+      launch_v     = "launch_angle_vertical",
+      launch_h     = "launch_angle_horizontal",
+      angle_source = "angle_source",
+      club_aoa     = "club_angle_deg",
+      club_path    = "club_path_deg",
     }
   }
 

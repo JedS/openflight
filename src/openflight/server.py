@@ -922,9 +922,11 @@ def on_shot_detected(shot: Shot):
                 if shot.club_speed_mph:
                     club_angle_v = kld7_vertical.get_club_angle(club_speed_mph=shot.club_speed_mph)
                     if club_angle_v and club_angle_v.vertical_deg is not None:
-                        shot.club_angle_deg = club_angle_v.vertical_deg
+                        # Negate: the radar sees where the club IS (above center = positive),
+                        # but AoA is the club's attack direction (descending = negative).
+                        shot.club_angle_deg = -club_angle_v.vertical_deg
                         logger.info("[SERVER] Club AoA: %.1f° (conf=%.0f%%)",
-                                     club_angle_v.vertical_deg, club_angle_v.confidence * 100)
+                                     shot.club_angle_deg, club_angle_v.confidence * 100)
 
                 kld7_vertical.reset()
 
