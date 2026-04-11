@@ -228,7 +228,7 @@ function AppContent() {
         {currentView === 'live' && (
           <div className="live-view">
             {isNewShot && <div key={shotVersion} className="shot-flash" />}
-            <ShotDisplay key={shotVersion} shot={latestShot} animate={isNewShot} unitSystem={unitSystem} />
+            <ShotDisplay key={shotVersion} shot={latestShot} animate={isNewShot} />
             {mockMode && (
               <button className="simulate-button" onClick={simulateShot}>
                 Simulate Shot
@@ -236,8 +236,8 @@ function AppContent() {
             )}
           </div>
         )}
-        {currentView === 'stats' && <StatsView shots={shots} onClearSession={clearSession} unitSystem={unitSystem} />}
-        {currentView === 'shots' && <ShotList shots={shots} unitSystem={unitSystem} />}
+        {currentView === 'stats' && <StatsView shots={shots} onClearSession={clearSession} />}
+        {currentView === 'shots' && <ShotList shots={shots} />}
         {currentView === 'camera' && (
           <CameraFeed cameraStatus={cameraStatus} onToggleCamera={toggleCamera} onToggleStream={toggleCameraStream} />
         )}

@@ -1,18 +1,18 @@
 import { useMemo, useState } from 'react';
+import { useUnitPreference } from '../state/useUnitPreference';
 import type { Shot } from '../types/shot';
 import { computeStats, getUniqueClubs } from '../types/shot';
-import type { UnitSystem } from '../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import './StatsView.css';
 
 interface StatsViewProps {
   shots: Shot[];
   onClearSession: () => void;
-  unitSystem: UnitSystem;
 }
 
-export function StatsView({ shots, onClearSession, unitSystem }: StatsViewProps) {
+export function StatsView({ shots, onClearSession }: StatsViewProps) {
   const [selectedClub, setSelectedClub] = useState<string | null>(null);
+  const { unitSystem } = useUnitPreference();
   const speedUnit = getSpeedUnit(unitSystem);
   const distanceUnit = getDistanceUnit(unitSystem);
 

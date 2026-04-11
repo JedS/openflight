@@ -1,5 +1,6 @@
 import { useMemo, useState, memo } from 'react';
 import type { Shot } from '../types/shot';
+import { useUnitPreference } from '../state/useUnitPreference';
 import type { UnitSystem } from '../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit } from '../utils/units';
 import './ShotList.css';
@@ -8,16 +9,16 @@ const SHOTS_PER_PAGE = 5;
 
 interface ShotListProps {
   shots: Shot[];
-  unitSystem: UnitSystem;
 }
 
 interface ShotRowProps {
   shot: Shot;
   shotNumber: number;
   unitSystem: UnitSystem;
+  distanceUnit: string;
 }
 
-const ShotRow = memo(function ShotRow({ shot, shotNumber, unitSystem }: ShotRowProps) {
+const ShotRow = memo(function ShotRow({ shot, shotNumber, unitSystem, distanceUnit }: ShotRowProps) {
   return (
     <div className="shot-row">
       <span className="shot-row__number">#{shotNumber}</span>
@@ -40,14 +41,16 @@ const ShotRow = memo(function ShotRow({ shot, shotNumber, unitSystem }: ShotRowP
       </span>
       <span className="shot-row__stat shot-row__stat--carry">
         <span className="shot-row__value">{formatDistance(shot.estimated_carry_yards, unitSystem, 0)}</span>
-        <span className="shot-row__label">{getDistanceUnit(unitSystem)}</span>
+        <span className="shot-row__label">{distanceUnit}</span>
       </span>
     </div>
   );
 });
 
-export function ShotList({ shots, unitSystem }: ShotListProps) {
+export function ShotList({ shots }: ShotListProps) {
   const [page, setPage] = useState(0);
+  const { unitSystem } = useUnitPreference();
+  const distanceUnit = getDistanceUnit(unitSystem);
 
   const totalPages = Math.ceil(shots.length / SHOTS_PER_PAGE);
 
@@ -76,6 +79,7 @@ export function ShotList({ shots, unitSystem }: ShotListProps) {
             shot={shot}
             shotNumber={shots.length - startIndex - index}
             unitSystem={unitSystem}
+            distanceUnit={distanceUnit}
           />
         ))}
       </div>

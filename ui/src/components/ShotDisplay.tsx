@@ -1,13 +1,12 @@
 import { useMemo } from 'react';
 import type { Shot } from '../types/shot';
-import type { UnitSystem } from '../utils/units';
+import { useUnitPreference } from '../state/useUnitPreference';
 import { formatCarryRange, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import './ShotDisplay.css';
 
 interface ShotDisplayProps {
   shot: Shot | null;
   animate?: boolean;
-  unitSystem: UnitSystem;
 }
 
 const GAUGE_MIN = 0;
@@ -127,7 +126,8 @@ function getLaunchAngleQuality(confidence: number | null): 'high' | 'medium' | '
   return 'low';
 }
 
-export function ShotDisplay({ shot, animate = false, unitSystem }: ShotDisplayProps) {
+export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
+  const { unitSystem } = useUnitPreference();
   const carryRange = useMemo(() => {
     if (!shot) return null;
     return formatCarryRange(shot.carry_range, unitSystem);
