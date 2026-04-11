@@ -10,6 +10,7 @@ import logging
 from typing import List, Optional, Tuple
 
 import numpy as np
+from scipy.signal import butter, sosfiltfilt
 
 from .types import (
     IQCapture,
@@ -69,10 +70,19 @@ class RollingBufferProcessor:
     # 15 mph acceptance threshold — no useful signal lives below 15 mph.
     DC_MASK_BINS = 150
 
-    # Spin detection
-    MIN_SPIN_RPM = 1000
-    MAX_SPIN_RPM = 10000
-    MIN_SPIN_SNR = 4.0
+    # Spin detection via amplitude envelope demodulation.
+    # The ball seam modulates the radar return at 2x spin rate.
+    SPIN_BANDPASS_BW_HZ = 700       # ±700 Hz around ball Doppler (must cover max seam freq)
+    SPIN_BANDPASS_ORDER = 4          # Butterworth filter order
+    SPIN_ENVELOPE_FFT_SIZE = 8192   # Zero-padded FFT for envelope
+    SPIN_MIN_SEAM_HZ = 80.0         # 2400 RPM min (seam = 2x spin)
+    SPIN_MAX_SEAM_HZ = 670.0        # 20100 RPM max
+    SPIN_MIN_SAMPLES = 600           # ~20ms minimum ball signal
+    SPIN_SNR_HIGH = 8.0              # High confidence threshold
+    SPIN_SNR_MEDIUM = 5.0            # Medium confidence threshold
+    SPIN_SNR_MIN = 3.0               # Minimum to report
+    SPIN_AUTOCORR_MIN = 0.3          # Minimum normalized correlation
+    SPIN_MIN_CYCLES = 2              # Minimum seam cycles to report
 
     def __init__(self, sample_rate: int = 30000):
         """Initialize processor with pre-computed window function.
@@ -407,118 +417,196 @@ class RollingBufferProcessor:
 
     def detect_spin(
         self,
-        ball_speeds: List[float],
-        sample_rate_hz: float,
+        capture: IQCapture,
+        ball_speed_mph: float,
+        ball_timestamp_ms: float,
     ) -> SpinResult:
         """
-        Detect spin rate from speed oscillations using secondary FFT.
+        Detect spin rate from amplitude envelope of the ball's Doppler signal.
 
-        The dimpled golf ball surface causes periodic speed variations
-        as the ball spins. We detect this by:
-        1. Detrending the speed data (remove average)
-        2. FFT to find dominant oscillation frequency
-        3. Convert frequency to RPM
+        The golf ball seam creates amplitude modulation at 2x spin rate as it
+        crosses the radar beam twice per revolution. We isolate the ball's
+        Doppler signal with a bandpass filter, extract the amplitude envelope,
+        then find the modulation frequency.
 
-        Args:
-            ball_speeds: Post-impact ball speed readings
-            sample_rate_hz: Sample rate of the speed data (~937 Hz)
-
-        Returns:
-            SpinResult with detected spin or failure reason
+        Primary: FFT on the envelope (good for irons/wedges with many cycles).
+        Fallback: Autocorrelation (more robust for drivers with few cycles).
         """
-        if len(ball_speeds) < 15:
-            return SpinResult.no_spin_detected("Insufficient ball speed samples")
+        i_data = np.array(capture.i_samples, dtype=np.float64)
+        q_data = np.array(capture.q_samples, dtype=np.float64)
 
-        speeds = np.array(ball_speeds)
+        # Remove DC offset
+        i_data -= np.mean(i_data)
+        q_data -= np.mean(q_data)
 
-        # Detrend: remove mean (average ball speed)
-        detrended = speeds - np.mean(speeds)
+        # Complex I/Q signal
+        iq = i_data + 1j * q_data
 
-        # Check if there's enough variation to analyze
-        if np.std(detrended) < 0.1:
-            return SpinResult.no_spin_detected("Speed variation too low")
+        # Ball Doppler frequency
+        ball_speed_mps = ball_speed_mph / self.MPS_TO_MPH
+        ball_doppler_hz = 2 * ball_speed_mps / self.WAVELENGTH_M
 
-        # Apply Hann window to reduce spectral leakage
-        n = len(detrended)
-        windowed = detrended * np.hanning(n)
+        # Bandpass filter around ball Doppler frequency
+        nyquist = self.SAMPLE_RATE / 2
+        low = (ball_doppler_hz - self.SPIN_BANDPASS_BW_HZ) / nyquist
+        high = (ball_doppler_hz + self.SPIN_BANDPASS_BW_HZ) / nyquist
 
-        # Zero-pad to 256 points for better frequency resolution.
-        # With 18-32 raw samples, the unpadded FFT has only 8-15 bins,
-        # each spanning 1000-2000 RPM. Zero-padding to 256 gives ~146 RPM/bin
-        # resolution, making peaks sharper and improving SNR measurement.
-        fft_size = max(256, n)
-        spin_fft = np.fft.fft(windowed, fft_size)
-        frequencies = np.fft.fftfreq(fft_size, d=1 / sample_rate_hz)
+        # Clamp to valid range
+        low = max(low, 0.001)
+        high = min(high, 0.999)
+        if low >= high:
+            return SpinResult.no_spin_detected("Ball Doppler outside filter range")
 
-        # Only look at positive frequencies in spin range
-        half = fft_size // 2
-        magnitude = np.abs(spin_fft[1:half])
-        freqs = frequencies[1:half]
+        try:
+            sos = butter(self.SPIN_BANDPASS_ORDER, [low, high], btype="band", output="sos")
+            filtered = sosfiltfilt(sos, iq)
+        except Exception as e:
+            return SpinResult.no_spin_detected(f"Bandpass filter failed: {e}")
 
-        # Restrict to valid spin frequency range (MIN_SPIN_RPM to MAX_SPIN_RPM)
-        min_freq = self.MIN_SPIN_RPM / 60
-        max_freq = self.MAX_SPIN_RPM / 60
-        valid_mask = (freqs >= min_freq) & (freqs <= max_freq)
+        # Amplitude envelope
+        envelope = np.abs(filtered)
 
+        # Trim to ball-present window (from ball onset to end of capture)
+        start_sample = max(0, int(ball_timestamp_ms * self.SAMPLE_RATE / 1000))
+        ball_envelope = envelope[start_sample:]
+
+        # Trim filter transients from both ends. sosfiltfilt's internal
+        # padding doesn't fully eliminate edge ripple in the envelope.
+        # Trim 1/(bandwidth) seconds from each end as a conservative estimate.
+        transient_samples = int(self.SAMPLE_RATE / self.SPIN_BANDPASS_BW_HZ)
+        if len(ball_envelope) > 2 * transient_samples + self.SPIN_MIN_SAMPLES:
+            ball_envelope = ball_envelope[transient_samples:-transient_samples]
+
+        if len(ball_envelope) < self.SPIN_MIN_SAMPLES:
+            return SpinResult.no_spin_detected(
+                f"Ball signal too short ({len(ball_envelope)} samples, need {self.SPIN_MIN_SAMPLES})"
+            )
+
+        # Check modulation depth before proceeding. Real seam modulation
+        # creates 1-5% amplitude variation; quantization noise creates <0.5%.
+        envelope_mean = np.mean(ball_envelope)
+        envelope_std = np.std(ball_envelope)
+        if envelope_mean > 0:
+            modulation_depth = envelope_std / envelope_mean
+            if modulation_depth < 0.005:
+                return SpinResult.no_spin_detected(
+                    f"Modulation depth too low ({modulation_depth:.4f})"
+                )
+
+        # Remove DC and apply Hann window
+        ball_envelope -= envelope_mean
+        if envelope_std < 1e-6:
+            return SpinResult.no_spin_detected("Envelope variation too low")
+        windowed = ball_envelope * np.hanning(len(ball_envelope))
+
+        # --- Primary: FFT on envelope ---
+        fft_result = np.fft.fft(windowed, self.SPIN_ENVELOPE_FFT_SIZE)
+        freqs = np.fft.fftfreq(self.SPIN_ENVELOPE_FFT_SIZE, d=1 / self.SAMPLE_RATE)
+        half = self.SPIN_ENVELOPE_FFT_SIZE // 2
+        magnitude = np.abs(fft_result[1:half])
+        freqs = freqs[1:half]
+
+        # Restrict to seam frequency range
+        valid_mask = (freqs >= self.SPIN_MIN_SEAM_HZ) & (freqs <= self.SPIN_MAX_SEAM_HZ)
         if not np.any(valid_mask):
-            return SpinResult.no_spin_detected("No valid spin frequencies in range")
+            return SpinResult.no_spin_detected("No valid seam frequencies in range")
 
-        valid_magnitude = magnitude[valid_mask]
+        valid_mag = magnitude[valid_mask]
         valid_freqs = freqs[valid_mask]
 
-        # Find peak in valid range
-        peak_idx = np.argmax(valid_magnitude)
+        # Reject first 2 bins in the valid range (DC leakage into envelope)
+        if len(valid_mag) > 2:
+            valid_mag = valid_mag.copy()
+            valid_mag[:2] = 0
+
+        peak_idx = np.argmax(valid_mag)
         peak_freq = valid_freqs[peak_idx]
-        peak_mag = valid_magnitude[peak_idx]
+        peak_mag = valid_mag[peak_idx]
 
-        # Reject if peak is at the first valid bin — this is almost always
-        # spectral leakage from the Hann window, not real spin signal.
-        # With 256-pt FFT at 937.5 Hz, bin 5 = 1099 RPM is always the
-        # first bin above MIN_SPIN_RPM and consistently "wins" on noise.
-        freq_resolution = sample_rate_hz / fft_size
-        first_valid_bin_freq = np.ceil(min_freq / freq_resolution) * freq_resolution
-        if abs(peak_freq - first_valid_bin_freq) < freq_resolution * 0.5:
+        # SNR: peak vs median noise floor in valid range
+        noise_floor = np.median(valid_mag[valid_mag > 0]) if np.any(valid_mag > 0) else 1.0
+        fft_snr = peak_mag / noise_floor if noise_floor > 0 else 0
+
+        # Seam frequency to spin RPM (seam = 2x spin)
+        spin_rpm = (peak_freq / 2) * 60
+
+        # Check minimum cycles in window
+        window_seconds = len(ball_envelope) / self.SAMPLE_RATE
+        seam_cycles = peak_freq * window_seconds
+
+        logger.info(
+            "[PROCESSOR] Spin envelope: peak=%.1f Hz (%.0f RPM), SNR=%.1f, "
+            "cycles=%.1f, window=%.0fms, samples=%d",
+            peak_freq, spin_rpm, fft_snr, seam_cycles,
+            window_seconds * 1000, len(ball_envelope),
+        )
+
+        # --- Fallback: Autocorrelation for marginal FFT ---
+        autocorr_confirmed = False
+        if fft_snr < self.SPIN_SNR_MEDIUM and fft_snr >= self.SPIN_SNR_MIN:
+            norm = np.correlate(windowed, windowed, mode="full")
+            norm = norm[len(norm) // 2:]  # positive lags only
+            if norm[0] > 0:
+                norm = norm / norm[0]
+
+            min_lag = int(self.SAMPLE_RATE / self.SPIN_MAX_SEAM_HZ)
+            max_lag = int(self.SAMPLE_RATE / self.SPIN_MIN_SEAM_HZ)
+            max_lag = min(max_lag, len(norm) - 1)
+
+            if min_lag < max_lag:
+                search_region = norm[min_lag:max_lag]
+                if len(search_region) > 0:
+                    acorr_peak_idx = np.argmax(search_region)
+                    acorr_peak_val = search_region[acorr_peak_idx]
+                    acorr_lag = min_lag + acorr_peak_idx
+
+                    if acorr_peak_val >= self.SPIN_AUTOCORR_MIN and acorr_lag > 0:
+                        acorr_freq = self.SAMPLE_RATE / acorr_lag
+                        acorr_rpm = (acorr_freq / 2) * 60
+
+                        if abs(acorr_rpm - spin_rpm) / max(spin_rpm, 1) < 0.10:
+                            autocorr_confirmed = True
+                            logger.info(
+                                "[PROCESSOR] Spin autocorrelation confirms: %.0f RPM (corr=%.2f)",
+                                acorr_rpm, acorr_peak_val,
+                            )
+                        elif acorr_peak_val >= 0.4:
+                            spin_rpm = acorr_rpm
+                            peak_freq = acorr_freq
+                            autocorr_confirmed = True
+                            logger.info(
+                                "[PROCESSOR] Spin autocorrelation override: %.0f RPM (corr=%.2f)",
+                                acorr_rpm, acorr_peak_val,
+                            )
+
+        # --- Quality assessment ---
+        if seam_cycles < self.SPIN_MIN_CYCLES:
             return SpinResult.no_spin_detected(
-                f"Peak at first valid bin ({abs(peak_freq) * 60:.0f} RPM) — likely spectral leakage"
+                f"Too few seam cycles ({seam_cycles:.1f}, need {self.SPIN_MIN_CYCLES})"
             )
 
-        # Calculate SNR against noise floor (median of all valid-range bins)
-        noise_floor = np.median(valid_magnitude)
-        snr = peak_mag / noise_floor if noise_floor > 0 else 0
-
-        # Convert to RPM
-        spin_rpm = abs(peak_freq) * 60
-
-        # Validate result
-        if spin_rpm < self.MIN_SPIN_RPM:
-            return SpinResult.no_spin_detected(f"Spin {spin_rpm:.0f} RPM below minimum")
-
-        if spin_rpm > self.MAX_SPIN_RPM:
-            return SpinResult.no_spin_detected(f"Spin {spin_rpm:.0f} RPM above maximum")
-
-        if snr < self.MIN_SPIN_SNR:
-            return SpinResult(
-                spin_rpm=spin_rpm,
-                confidence=0.3,
-                snr=snr,
-                quality="low",
+        if fft_snr < self.SPIN_SNR_MIN and not autocorr_confirmed:
+            return SpinResult.no_spin_detected(
+                f"SNR too low ({fft_snr:.1f}, need {self.SPIN_SNR_MIN})"
             )
 
-        # Assess quality
-        if snr >= 5.0:
+        if fft_snr >= self.SPIN_SNR_HIGH and seam_cycles >= 5:
             quality = "high"
             confidence = 0.9
-        elif snr >= 4.0:
+        elif fft_snr >= self.SPIN_SNR_MEDIUM or autocorr_confirmed:
             quality = "medium"
             confidence = 0.7
+        elif fft_snr >= self.SPIN_SNR_MIN:
+            quality = "low"
+            confidence = 0.4
         else:
-            quality = "medium"
-            confidence = 0.6
+            quality = "low"
+            confidence = 0.3
 
         return SpinResult(
-            spin_rpm=spin_rpm,
+            spin_rpm=round(spin_rpm),
             confidence=confidence,
-            snr=snr,
+            snr=round(fft_snr, 2),
             quality=quality,
         )
 
@@ -675,18 +763,11 @@ class RollingBufferProcessor:
         else:
             logger.debug("[PROCESSOR] No club speed found (ball=%.1f mph)", ball_speed_mph)
 
-        # Try spin detection
-        ball_speeds = self.extract_ball_speeds(
-            timeline, ball_timestamp_ms, ball_speed_mph
-        )
-        spin = self.detect_spin(ball_speeds, timeline.sample_rate_hz)
+        # Spin detection via amplitude envelope demodulation on raw I/Q
+        spin = self.detect_spin(capture, ball_speed_mph, ball_timestamp_ms)
 
         logger.info(
-            "[PROCESSOR] Spin analysis: %d ball speed samples in %.0f-%.0fms window, "
-            "sample_rate=%.0f Hz, spin=%.0f RPM, snr=%.2f, quality=%s",
-            len(ball_speeds),
-            ball_timestamp_ms, ball_timestamp_ms + 50,
-            timeline.sample_rate_hz,
+            "[PROCESSOR] Spin result: %.0f RPM, SNR=%.2f, quality=%s",
             spin.spin_rpm, spin.snr, spin.quality,
         )
 

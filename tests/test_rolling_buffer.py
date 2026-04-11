@@ -1370,104 +1370,80 @@ class TestExtractBallSpeeds:
 class TestSpinDetectionIntegration:
     """End-to-end spin detection tests using synthetic I/Q with speed oscillations."""
 
-    def _make_iq_with_oscillating_speed(
+    def _make_iq_with_seam_modulation(
         self,
         base_speed_mph: float,
         spin_rpm: float,
+        modulation_depth: float = 0.03,
         sample_rate: int = 30000,
         num_samples: int = 4096,
-        amplitude_factor: float = 0.02,
     ):
-        """
-        Generate synthetic I/Q data with a speed that oscillates at spin_rpm.
-
-        The ball signal has a Doppler frequency that varies sinusoidally,
-        simulating the dimple-induced speed modulation.
-        """
-        # Convert base speed to Doppler frequency
-        wavelength = 0.01243  # 24.125 GHz
-        base_speed_mps = base_speed_mph / 2.23694
-        base_freq = 2 * base_speed_mps / wavelength
-
-        # Spin modulation: speed varies by ±amplitude_factor around base
-        spin_freq = spin_rpm / 60.0  # Hz
+        """Generate synthetic I/Q with amplitude modulation at 2x spin rate."""
+        wavelength = 0.01243
+        speed_mps = base_speed_mph / 2.23694
+        doppler_hz = 2 * speed_mps / wavelength
+        seam_hz = (spin_rpm / 60.0) * 2
 
         t = np.arange(num_samples) / sample_rate
+        phase = 2 * np.pi * doppler_hz * t
 
-        # Instantaneous frequency = base_freq + modulation
-        modulation = base_freq * amplitude_factor * np.sin(2 * np.pi * spin_freq * t)
-        inst_freq = base_freq + modulation
+        amplitude = 200 * (1.0 + modulation_depth * np.sin(2 * np.pi * seam_hz * t))
 
-        # Phase is integral of frequency
-        phase = 2 * np.pi * np.cumsum(inst_freq) / sample_rate
-
-        # Generate I/Q with voltage scaling to match ADC range
-        signal_amplitude = 200  # Strong signal
-        i_signal = signal_amplitude * np.cos(phase)
-        q_signal = signal_amplitude * np.sin(phase)
-
-        # Add DC offset to match ADC center (12-bit, 0-4095)
-        i_samples = (i_signal + 2048).astype(int).clip(0, 4095).tolist()
-        q_samples = (q_signal + 2048).astype(int).clip(0, 4095).tolist()
+        i_samples = (amplitude * np.cos(phase) + 2048).astype(int).clip(0, 4095).tolist()
+        q_samples = (amplitude * np.sin(phase) + 2048).astype(int).clip(0, 4095).tolist()
 
         return i_samples, q_samples
 
-    def test_spin_detected_with_oscillating_signal(self):
-        """Synthetic I/Q with spin modulation should produce non-zero spin_rpm."""
-        target_spin_rpm = 3000
-        target_speed_mph = 150
-
-        i_samples, q_samples = self._make_iq_with_oscillating_speed(
-            base_speed_mph=target_speed_mph,
-            spin_rpm=target_spin_rpm,
+    def test_spin_detected_7iron(self):
+        """7-iron at 7000 RPM should be reliably detected."""
+        i_samples, q_samples = self._make_iq_with_seam_modulation(
+            base_speed_mph=120, spin_rpm=7000, modulation_depth=0.03,
         )
-
         capture = IQCapture(
-            sample_time=0.0,
-            trigger_time=0.136,  # Trigger at end (all pre-trigger)
-            i_samples=i_samples,
-            q_samples=q_samples,
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
         )
-
         processor = RollingBufferProcessor()
         result = processor.process_capture(capture)
-
-        assert result is not None, "Processing should succeed"
-        assert result.ball_speed_mph > 100, (
-            f"Ball speed {result.ball_speed_mph} should be near {target_speed_mph}"
-        )
-        # The key fix: with ball_timestamp_ms-based extraction,
-        # we should get ball speed samples for spin analysis
-        ball_speeds = processor.extract_ball_speeds(
-            result.timeline, result.ball_timestamp_ms, result.ball_speed_mph,
-        )
-        assert len(ball_speeds) > 0, (
-            f"Should find ball speed samples at ball_timestamp_ms={result.ball_timestamp_ms}"
-        )
-
-    def test_process_capture_spin_field_populated(self):
-        """process_capture should populate spin field in ProcessedCapture."""
-        i_samples, q_samples = self._make_iq_with_oscillating_speed(
-            base_speed_mph=150, spin_rpm=3000,
-        )
-
-        capture = IQCapture(
-            sample_time=0.0,
-            trigger_time=0.136,
-            i_samples=i_samples,
-            q_samples=q_samples,
-        )
-
-        processor = RollingBufferProcessor()
-        result = processor.process_capture(capture)
-
         assert result is not None
-        assert result.spin is not None, "Spin result should be populated"
-        # Spin detection may or may not succeed depending on signal quality,
-        # but the result should exist (not None)
+        assert result.spin is not None
+        assert result.spin.spin_rpm > 0, f"Should detect spin, got quality={result.spin.quality}"
+        assert abs(result.spin.spin_rpm - 7000) < 500, f"Expected ~7000, got {result.spin.spin_rpm}"
 
-    def test_no_spin_with_constant_speed(self):
-        """Constant-speed signal (no oscillation) should yield low/no spin."""
+    def test_spin_detected_driver(self):
+        """Driver at 3000 RPM should still be detectable."""
+        i_samples, q_samples = self._make_iq_with_seam_modulation(
+            base_speed_mph=160, spin_rpm=3000, modulation_depth=0.03,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
+        )
+        processor = RollingBufferProcessor()
+        result = processor.process_capture(capture)
+        assert result is not None
+        assert result.spin is not None
+        assert result.spin.spin_rpm > 0, f"Should detect spin, got quality={result.spin.quality}"
+        assert abs(result.spin.spin_rpm - 3000) < 500, f"Expected ~3000, got {result.spin.spin_rpm}"
+
+    def test_spin_detected_wedge(self):
+        """Wedge at 10000 RPM."""
+        i_samples, q_samples = self._make_iq_with_seam_modulation(
+            base_speed_mph=90, spin_rpm=10000, modulation_depth=0.05,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
+        )
+        processor = RollingBufferProcessor()
+        result = processor.process_capture(capture)
+        assert result is not None
+        assert result.spin is not None
+        assert result.spin.spin_rpm > 0
+        assert abs(result.spin.spin_rpm - 10000) < 500
+
+    def test_no_spin_with_constant_amplitude(self):
+        """Constant amplitude should yield no spin."""
         sample_rate = 30000
         num_samples = 4096
         speed_mph = 150
@@ -1482,20 +1458,26 @@ class TestSpinDetectionIntegration:
         q_samples = (200 * np.sin(phase) + 2048).astype(int).clip(0, 4095).tolist()
 
         capture = IQCapture(
-            sample_time=0.0,
-            trigger_time=0.136,
-            i_samples=i_samples,
-            q_samples=q_samples,
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
         )
-
         processor = RollingBufferProcessor()
         result = processor.process_capture(capture)
-
         assert result is not None
-        # With constant speed, spin detection should fail or return 0
-        if result.spin and result.spin.spin_rpm > 0:
-            # If spin is detected, it should have low confidence
-            assert result.spin.confidence < 0.7, (
-                f"Constant-speed signal should not produce reliable spin "
-                f"(got {result.spin.spin_rpm} rpm, confidence {result.spin.confidence})"
-            )
+        assert result.spin is not None
+        assert result.spin.spin_rpm == 0 or result.spin.quality not in ("high", "medium"), \
+            f"Unexpected spin: {result.spin.spin_rpm} RPM, quality={result.spin.quality}"
+
+    def test_spin_result_is_populated(self):
+        """process_capture should always populate the spin field."""
+        i_samples, q_samples = self._make_iq_with_seam_modulation(
+            base_speed_mph=130, spin_rpm=5000,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
+        )
+        processor = RollingBufferProcessor()
+        result = processor.process_capture(capture)
+        assert result is not None
+        assert result.spin is not None
