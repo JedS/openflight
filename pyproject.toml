@@ -76,6 +76,7 @@ packages = ["src/openflight"]
 [dependency-groups]
 dev = [
     "pylint>=3.3.9",
+    "pre-commit>=4.0.0",
     "pytest>=7.0.0",
     "ruff>=0.1.0",
 ]
