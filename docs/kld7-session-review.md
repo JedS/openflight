@@ -37,14 +37,14 @@ For a one-off review on any machine, run the script in an isolated `uv`
 environment with only the analysis dependencies it needs:
 
 ```bash
-uv run --no-project --with numpy --with matplotlib python scripts/review_kld7_session.py session_logs/session_20260403_133805_range.jsonl
+uv run --no-project --with numpy --with matplotlib python scripts/analysis/review_kld7_session.py session_logs/session_20260403_133805_range.jsonl
 ```
 
 If you already have the repo environment synced with the analysis extras, the
 regular project command also works:
 
 ```bash
-uv run python scripts/review_kld7_session.py session_logs/session_20260403_133805_range.jsonl
+uv run python scripts/analysis/review_kld7_session.py session_logs/session_20260403_133805_range.jsonl
 ```
 
 If you want to remove previously generated files in the output directory first,
@@ -52,7 +52,7 @@ use `--clean`. Cleanup is intentionally restricted to directories that look like
 `<repo>/shots/session_review_*`.
 
 ```bash
-uv run --no-project --with numpy --with matplotlib python scripts/review_kld7_session.py session_logs/session_20260403_133805_range.jsonl --clean
+uv run --no-project --with numpy --with matplotlib python scripts/analysis/review_kld7_session.py session_logs/session_20260403_133805_range.jsonl --clean
 ```
 
 Default output location:

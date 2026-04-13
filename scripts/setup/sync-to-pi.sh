@@ -8,4 +8,4 @@
   echo "Synced to $PI_HOST"
 
 
-# usage: PI_HOST=coleman@golfmonitor.local ./scripts/sync-to-pi.sh
+# usage: PI_HOST=coleman@golfmonitor.local ./scripts/setup/sync-to-pi.sh

@@ -235,11 +235,11 @@ if command -v alloy &> /dev/null || systemctl is-enabled alloy &> /dev/null 2>&1
             warn "Alloy installed but credentials not configured (/etc/alloy/credentials.env)"
         fi
     else
-        warn "Alloy installed but no credentials file found (run: sudo scripts/setup_alloy.sh)"
+        warn "Alloy installed but no credentials file found (run: sudo scripts/setup/setup_alloy.sh)"
     fi
 else
     warn "Grafana Alloy not installed — session logs will only be saved locally"
-    warn "  Install with: sudo scripts/setup_alloy.sh"
+    warn "  Install with: sudo scripts/setup/setup_alloy.sh"
 fi
 
 # Start the server

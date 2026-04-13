@@ -6,7 +6,7 @@
 # session logs and ship them to Grafana Cloud Loki.
 #
 # Usage:
-#   sudo ./scripts/setup_alloy.sh
+#   sudo ./scripts/setup/setup_alloy.sh
 #
 # After running this script:
 #   1. Edit /etc/alloy/credentials.env with your Grafana Cloud credentials

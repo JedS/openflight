@@ -49,9 +49,9 @@ The radar needs a trigger to know when to dump the buffer. The recommended appro
 
 > **Important: Persistent Mode Required.** The OPS243-A has a firmware bug where the HOST_INT pin mode switches when transitioning from normal mode (GS) to rolling buffer mode (GC) at runtime. The fix from OmniPreSense: save rolling buffer mode to persistent memory (`A!` command) and power cycle the board. After that, hardware triggers work correctly. See the [Radar Setup section](raspberry-pi-setup.md#radar-setup-one-time) in the Pi setup guide, or run:
 > ```
-> uv run python scripts/test_rolling_buffer_persist.py --setup
+> uv run python scripts/hardware-test/test_rolling_buffer_persist.py --setup
 > # Power cycle the radar
-> uv run python scripts/test_rolling_buffer_persist.py --test
+> uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 > ```
 
 ### 1. Direct Hardware Sound Trigger (Recommended)
