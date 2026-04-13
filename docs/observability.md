@@ -33,7 +33,7 @@ Session Logs (JSONL)  →  Grafana Alloy  →  Grafana Cloud Loki  →  Grafana 
 ### 2. Install Alloy
 
 ```bash
-sudo ./scripts/setup_alloy.sh
+sudo ./scripts/setup/setup_alloy.sh
 ```
 
 This script:
@@ -156,7 +156,7 @@ If credentials are configured but Alloy isn't running, it starts the service aut
 Run the setup script:
 
 ```bash
-sudo ./scripts/setup_alloy.sh
+sudo ./scripts/setup/setup_alloy.sh
 ```
 
 Then fill in `/etc/alloy/credentials.env`.
@@ -207,7 +207,7 @@ sudo chown -R $(whoami):$(whoami) /var/lib/alloy
 | `config/credentials.env.example` | Credentials template |
 | `/etc/alloy/config.alloy` | Deployed config (written by setup script) |
 | `/etc/alloy/credentials.env` | Deployed credentials (user fills in) |
-| `scripts/setup_alloy.sh` | Installation and setup script |
+| `scripts/setup/setup_alloy.sh` | Installation and setup script |
 
 ### Environment Variables
 

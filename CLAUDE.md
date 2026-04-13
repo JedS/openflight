@@ -124,9 +124,9 @@ This is due to a firmware bug where HOST_INT pin mode switches when transitionin
 
 ```bash
 # Configure and save rolling buffer mode to flash (one-time)
-uv run python scripts/test_rolling_buffer_persist.py --setup
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --setup
 # Power cycle the radar (unplug USB, wait 3s, replug)
-uv run python scripts/test_rolling_buffer_persist.py --test
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```
 
 ### Running the Application
@@ -141,10 +141,10 @@ scripts/start-kiosk.sh --kld7                          # With K-LD7 angle radars
 
 ```bash
 # Test persistent rolling buffer + hardware trigger (recommended)
-uv run python scripts/test_rolling_buffer_persist.py --test
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 
 # Test direct hardware sound trigger (GATE → HOST_INT)
-uv run python scripts/test_sound_trigger_hardware.py
+uv run python scripts/hardware-test/test_sound_trigger_hardware.py
 ```
 
 ## Architecture

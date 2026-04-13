@@ -31,7 +31,7 @@ git clone https://github.com/jewbetcha/openflight.git
 cd openflight
 
 # Run the setup script (handles everything)
-./scripts/setup.sh
+./scripts/setup/setup.sh
 ```
 
 The setup script will:
@@ -60,7 +60,7 @@ The OPS243-A needs a one-time configuration to enable rolling buffer mode with h
 ### 1. Configure and Save
 
 ```bash
-uv run python scripts/test_rolling_buffer_persist.py --setup
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --setup
 ```
 
 ### 2. Power Cycle
@@ -70,7 +70,7 @@ Unplug the radar's USB cable, wait 3 seconds, plug it back in.
 ### 3. Verify
 
 ```bash
-uv run python scripts/test_rolling_buffer_persist.py --test
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```
 
 Make a sound near the SEN-14262 — you should see trigger data with I/Q samples.
@@ -158,7 +158,7 @@ DISPLAY=:0 ./scripts/start-kiosk.sh
 ### Enable the Service
 
 ```bash
-sudo cp ~/openflight/scripts/openflight.service /etc/systemd/system/
+sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable openflight
 sudo systemctl start openflight
@@ -186,7 +186,7 @@ sudo systemctl restart openflight
 OpenFlight can ship session logs to Grafana Cloud for long-term analysis.
 
 ```bash
-sudo ./scripts/setup_alloy.sh
+sudo ./scripts/setup/setup_alloy.sh
 sudo vim /etc/alloy/credentials.env
 ```
 
@@ -212,7 +212,7 @@ See the [Sound Trigger Wiring Guide — Troubleshooting](sound-trigger-wiring.md
 ls /dev/ttyUSB* /dev/kld7_*
 
 # Test standalone
-uv run python scripts/test_kld7.py
+uv run python scripts/hardware-test/test_kld7.py
 ```
 
 Look for `[KLD7] Connected on /dev/ttyUSB...` in the server logs. See [K-LD7 Troubleshooting](kld7-troubleshooting.md) for "Wrong length reply" and other connection issues.
@@ -224,7 +224,7 @@ journalctl -u openflight --no-pager -n 50
 
 # If service is masked
 sudo systemctl unmask openflight
-sudo cp ~/openflight/scripts/openflight.service /etc/systemd/system/
+sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable openflight
 ```
@@ -264,8 +264,8 @@ openflight-server --web-port 3000    # Custom port
 ### Testing
 
 ```bash
-uv run python scripts/test_rolling_buffer_persist.py --test    # Sound trigger
-uv run python scripts/test_sound_trigger_hardware.py           # Direct trigger test
-uv run python scripts/test_kld7.py                             # K-LD7 standalone
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test    # Sound trigger
+uv run python scripts/hardware-test/test_sound_trigger_hardware.py           # Direct trigger test
+uv run python scripts/hardware-test/test_kld7.py                             # K-LD7 standalone
 uv run pytest tests/ -v                                        # Full test suite
 ```

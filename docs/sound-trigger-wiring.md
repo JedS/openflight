@@ -90,12 +90,12 @@ The OPS243-A must have rolling buffer mode saved to persistent memory for HOST_I
 
 ```bash
 # Configure and save rolling buffer mode to flash (one-time)
-uv run python scripts/test_rolling_buffer_persist.py --setup
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --setup
 
 # Power cycle the radar (unplug USB, wait 3s, replug)
 
 # Verify
-uv run python scripts/test_rolling_buffer_persist.py --test
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```
 
 ---
@@ -109,7 +109,7 @@ Make a loud sound near the SEN-14262. The onboard LED should flash briefly, then
 ### Full Test: Software
 
 ```bash
-uv run python scripts/test_sound_trigger_hardware.py
+uv run python scripts/hardware-test/test_sound_trigger_hardware.py
 ```
 
 You should see:
@@ -136,7 +136,7 @@ The preamp gain is too high for 3.3V operation.
 1. Check the GATE LED flashes when you clap
 2. Verify GND is shared between all three boards (Pi, SEN-14262, OPS243-A)
 3. Verify HOST_INT is J3 **Pin 3** (not Pin 2)
-4. Run `uv run python scripts/test_rolling_buffer_persist.py --test` to confirm radar is in rolling buffer mode
+4. Run `uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test` to confirm radar is in rolling buffer mode
 
 ### Triggers constantly / too sensitive
 
