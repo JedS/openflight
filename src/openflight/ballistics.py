@@ -44,9 +44,9 @@ AIR_DENSITY_STD = 1.225  # kg/m³ at sea level, 15 °C ISA
 # These are simple parametric forms consistent with Bearman & Harvey (1976)
 # and Kensrud & Smith (2018) for dimpled balls past the drag crisis
 # (Re ~ 5e4–2e5), which covers the full range of realistic golf shots.
-CD_BASE = 0.24
+CD_BASE = 0.205
 CD_SPIN_COEFF = 0.18
-CL_SATURATION = 0.30
+CL_SATURATION = 0.32
 CL_HALF_SP = 0.15
 
 # Exponential spin decay: ω(t) = ω₀·exp(-rate·t).
