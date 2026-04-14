@@ -12,6 +12,11 @@ from typing import List, Optional
 
 from .ops243 import SpeedReading
 
+# Canonical threshold separating "high" from "medium" spin-measurement
+# confidence. Used by Shot.spin_quality and by ballistics.resolve_launch
+# (which only trusts measured spin at "high" confidence).
+SPIN_CONFIDENCE_HIGH = 0.7
+
 
 class ClubType(Enum):
     """Golf club types for distance estimation."""
@@ -312,7 +317,7 @@ class Shot:
         """
         if self.spin_confidence is None:
             return None
-        if self.spin_confidence >= 0.7:
+        if self.spin_confidence >= SPIN_CONFIDENCE_HIGH:
             return "high"
         if self.spin_confidence >= 0.4:
             return "medium"
