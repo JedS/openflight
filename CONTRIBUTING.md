@@ -198,4 +198,4 @@ The `MockLaunchMonitor` class simulates realistic shot data based on TrackMan av
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions will be licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
