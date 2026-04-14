@@ -22,7 +22,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from .launch_monitor import ClubType, Shot
+from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
 
 MPH_TO_MPS = 0.44704
 MPS_TO_MPH = 1.0 / MPH_TO_MPS
@@ -64,11 +64,6 @@ MAX_FLIGHT_SECONDS = 15.0
 # runs at DT_SECONDS; this only controls how many points the caller sees,
 # keeping payload size reasonable for UI/log consumers.
 SAMPLE_INTERVAL_S = 0.05
-
-# Must match the "high" threshold in Shot.spin_quality (launch_monitor.py).
-# Below this we treat the radar measurement as unreliable and substitute
-# club-typical spin rather than letting noise poison the trajectory.
-SPIN_CONFIDENCE_HIGH = 0.7
 
 # Club-typical spin (RPM) from TrackMan PGA Tour averages.
 # Used as fallback when measured spin is missing or low-confidence.
