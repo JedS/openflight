@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
 
+from ..launch_monitor import SPIN_CONFIDENCE_HIGH
 from .types import (
     IQCapture,
     ProcessedCapture,
