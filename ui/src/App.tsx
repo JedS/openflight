@@ -16,7 +16,9 @@ import {
   LaunchDaddySecretIndicator,
 } from './components/LaunchDaddy';
 import { ShotProvider } from './state/ShotProvider';
+import { UnitPreferenceProvider } from './state/UnitPreferenceProvider';
 import { useShotContext } from './state/useShotContext';
+import { useUnitPreference } from './state/useUnitPreference';
 
 import Logo from './logo/Logo';
 
@@ -83,6 +85,7 @@ function AppContent() {
   const [selectedClub, setSelectedClub] = useState('driver');
   const [showShutdown, setShowShutdown] = useState(false);
   const { isLaunchDaddyMode, isExploding, triggerExplosion, handleSecretTap } = useLaunchDaddy();
+  const { unitSystem, setUnitSystem } = useUnitPreference();
 
   // Trigger explosion when a new shot is detected in Launch Daddy mode
   useEffect(() => {
@@ -124,6 +127,24 @@ function AppContent() {
           {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <Logo size="small" variant="light" />}
         </div>
         <div className="header__controls">
+          <div className="unit-toggle" role="group" aria-label="Display units">
+            <button
+              type="button"
+              className={`unit-toggle__button ${unitSystem === 'imperial' ? 'unit-toggle__button--active' : ''}`}
+              onClick={() => setUnitSystem('imperial')}
+              aria-pressed={unitSystem === 'imperial'}
+            >
+              MPH/YDS
+            </button>
+            <button
+              type="button"
+              className={`unit-toggle__button ${unitSystem === 'metric' ? 'unit-toggle__button--active' : ''}`}
+              onClick={() => setUnitSystem('metric')}
+              aria-pressed={unitSystem === 'metric'}
+            >
+              KMH/M
+            </button>
+          </div>
           <ClubPicker selectedClub={selectedClub} onClubChange={handleClubChange} />
           <BallDetectionIndicator
             available={cameraStatus.available}
@@ -242,9 +263,11 @@ function AppContent() {
 function App() {
   return (
     <LaunchDaddyProvider>
-      <ShotProvider>
-        <AppContent />
-      </ShotProvider>
+      <UnitPreferenceProvider>
+        <ShotProvider>
+          <AppContent />
+        </ShotProvider>
+      </UnitPreferenceProvider>
     </LaunchDaddyProvider>
   );
 }

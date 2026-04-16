@@ -13,6 +13,7 @@ try:
         bin_to_velocity_kmh,
         cfar_detect,
         compute_spectrum,
+        extract_launch_angle,
         parse_radc_payload,
         to_complex_iq,
     )
@@ -23,6 +24,7 @@ except ImportError:
         bin_to_velocity_kmh,
         cfar_detect,
         compute_spectrum,
+        extract_launch_angle,
         parse_radc_payload,
         to_complex_iq,
     )
@@ -269,3 +271,23 @@ class TestCompareRadcVsPdat:
         result = compare_radc_vs_pdat([], [])
         assert result["radc_count"] == 0
         assert result["pdat_count"] == 0
+
+
+class TestAngleBoundsValidation:
+    """Tests for hard angle bounds in extract_launch_angle."""
+
+    def test_orientation_parameter_accepted(self):
+        """extract_launch_angle should accept orientation parameter."""
+        # Empty frames — just verify the parameter doesn't crash
+        results = extract_launch_angle([], orientation="vertical")
+        assert results == []
+
+    def test_orientation_none_is_default(self):
+        """Default orientation=None should not filter (backward compat)."""
+        results = extract_launch_angle([])
+        assert results == []
+
+    def test_horizontal_orientation_accepted(self):
+        """extract_launch_angle should accept horizontal orientation."""
+        results = extract_launch_angle([], orientation="horizontal")
+        assert results == []

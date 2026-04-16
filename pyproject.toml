@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "DIY golf launch monitor using OPS243-A Doppler radar"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-or-later" }
 authors = [
     { name = "OpenFlight Contributors" }
 ]
@@ -12,7 +12,7 @@ keywords = ["golf", "launch-monitor", "doppler", "radar", "ops243", "raspberry-p
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",

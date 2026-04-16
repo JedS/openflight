@@ -324,6 +324,7 @@ class KLD7Tracker:
             angle_offset_deg=self.angle_offset_deg,
             speed_tolerance_mph=10.0,
             impact_energy_threshold=energy_threshold,
+            orientation=self.orientation,
         )
 
         if not results:

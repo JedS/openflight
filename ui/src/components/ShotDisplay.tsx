@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
 import type { Shot } from '../types/shot';
+import { useUnitPreference } from '../state/useUnitPreference';
+import { formatCarryRange, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import './ShotDisplay.css';
 
 interface ShotDisplayProps {
@@ -7,17 +9,25 @@ interface ShotDisplayProps {
   animate?: boolean;
 }
 
-// Speed gauge configuration
 const GAUGE_MIN = 0;
 const GAUGE_MAX = 200; // mph
 const GAUGE_START_ANGLE = -140;
 const GAUGE_END_ANGLE = 140;
 
-function SpeedGauge({ speed, label }: { speed: number; label: string }) {
-  const percentage = Math.min(Math.max((speed - GAUGE_MIN) / (GAUGE_MAX - GAUGE_MIN), 0), 1);
+function SpeedGauge({
+  speedMph,
+  label,
+  displayValue,
+  unit,
+}: {
+  speedMph: number;
+  label: string;
+  displayValue: string;
+  unit: string;
+}) {
+  const percentage = Math.min(Math.max((speedMph - GAUGE_MIN) / (GAUGE_MAX - GAUGE_MIN), 0), 1);
   const angle = GAUGE_START_ANGLE + (GAUGE_END_ANGLE - GAUGE_START_ANGLE) * percentage;
 
-  // SVG arc path calculation
   const radius = 85;
   const cx = 100;
   const cy = 100;
@@ -43,9 +53,7 @@ function SpeedGauge({ speed, label }: { speed: number; label: string }) {
   return (
     <div className="speed-gauge">
       <svg viewBox="0 0 200 140" className="speed-gauge__svg">
-        {/* Background arc */}
         <path d={backgroundArc} fill="none" stroke="rgba(245, 240, 230, 0.1)" strokeWidth="12" strokeLinecap="round" />
-        {/* Value arc */}
         <path
           d={valueArc}
           fill="none"
@@ -54,7 +62,6 @@ function SpeedGauge({ speed, label }: { speed: number; label: string }) {
           strokeLinecap="round"
           className="speed-gauge__value-arc"
         />
-        {/* Gradient definition */}
         <defs>
           <linearGradient id="goldGradient" x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#A68B2A" />
@@ -63,8 +70,8 @@ function SpeedGauge({ speed, label }: { speed: number; label: string }) {
         </defs>
       </svg>
       <div className="speed-gauge__content">
-        <span className="speed-gauge__value">{speed.toFixed(1)}</span>
-        <span className="speed-gauge__unit">mph</span>
+        <span className="speed-gauge__value">{displayValue}</span>
+        <span className="speed-gauge__unit">{unit}</span>
         <span className="speed-gauge__label">{label}</span>
       </div>
     </div>
@@ -120,10 +127,11 @@ function getLaunchAngleQuality(confidence: number | null): 'high' | 'medium' | '
 }
 
 export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
+  const { unitSystem } = useUnitPreference();
   const carryRange = useMemo(() => {
     if (!shot) return null;
-    return `${shot.carry_range[0]}–${shot.carry_range[1]} yds`;
-  }, [shot]);
+    return formatCarryRange(shot.carry_range, unitSystem);
+  }, [shot, unitSystem]);
 
   const displayCarry = shot?.carry_spin_adjusted ?? shot?.estimated_carry_yards ?? 0;
   const carrySubtext = shot?.carry_spin_adjusted ? 'spin-adjusted' : carryRange || undefined;
@@ -153,23 +161,26 @@ export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
   return (
     <div className={`shot-display ${animate ? 'shot-display--animate' : ''}`}>
       <div className="shot-display__layout">
-        {/* Left: Ball Speed Gauge */}
         <div className="shot-display__primary">
-          <SpeedGauge speed={shot.ball_speed_mph} label="Ball Speed" />
+          <SpeedGauge
+            speedMph={shot.ball_speed_mph}
+            label="Ball Speed"
+            displayValue={formatSpeed(shot.ball_speed_mph, unitSystem, 1)}
+            unit={getSpeedUnit(unitSystem)}
+          />
         </div>
 
-        {/* Right: Secondary Metrics */}
         <div className="shot-display__metrics">
           <MetricCard
-            value={Math.round(displayCarry)}
-            unit="yds"
+            value={formatDistance(displayCarry, unitSystem, 0)}
+            unit={getDistanceUnit(unitSystem)}
             label="Est. Carry"
             subtext={carrySubtext}
             variant="primary"
           />
           <MetricCard
-            value={shot.club_speed_mph ? shot.club_speed_mph.toFixed(1) : '—'}
-            unit={shot.club_speed_mph ? 'mph' : undefined}
+            value={shot.club_speed_mph ? formatSpeed(shot.club_speed_mph, unitSystem, 1) : '—'}
+            unit={shot.club_speed_mph ? getSpeedUnit(unitSystem) : undefined}
             label="Club Speed"
             subtext={shot.smash_factor ? `${shot.smash_factor.toFixed(2)} smash` : undefined}
             variant="secondary"

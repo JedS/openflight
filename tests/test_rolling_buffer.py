@@ -1489,3 +1489,100 @@ class TestSpinDetectionIntegration:
         result = processor.process_capture(capture)
         assert result is not None
         assert result.spin is not None
+
+
+# =============================================================================
+# Tests for Spin Validation Gates
+# =============================================================================
+
+class TestSpinValidationGates:
+    """Tests for spin detection validation: RPM ceiling, confidence tiers, modulation floor."""
+
+    def _make_iq_with_seam_modulation(
+        self,
+        base_speed_mph: float,
+        spin_rpm: float,
+        modulation_depth: float = 0.03,
+        sample_rate: int = 30000,
+        num_samples: int = 4096,
+    ):
+        """Generate synthetic I/Q with amplitude modulation at 1x spin rate."""
+        wavelength = 0.01243
+        speed_mps = base_speed_mph / 2.23694
+        doppler_hz = 2 * speed_mps / wavelength
+        seam_hz = spin_rpm / 60.0
+        t = np.arange(num_samples) / sample_rate
+        phase = 2 * np.pi * doppler_hz * t
+        amplitude = 200 * (1.0 + modulation_depth * np.sin(2 * np.pi * seam_hz * t))
+        i_samples = (amplitude * np.cos(phase) + 2048).astype(int).clip(0, 4095).tolist()
+        q_samples = (amplitude * np.sin(phase) + 2048).astype(int).clip(0, 4095).tolist()
+        return i_samples, q_samples
+
+    def test_rpm_above_12000_rejected(self):
+        """Spin above SPIN_MAX_SEAM_HZ * 60 (12000 RPM) must be rejected.
+
+        Uses 18000 RPM (300 Hz) — far enough above the 200 Hz cap that
+        spectral leakage from the Hann window can't produce a strong
+        artifact inside the valid [33, 200] Hz range.
+        """
+        processor = RollingBufferProcessor()
+        i_samples, q_samples = self._make_iq_with_seam_modulation(
+            base_speed_mph=100, spin_rpm=18000, modulation_depth=0.05,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
+        )
+        result = processor.detect_spin(capture, ball_speed_mph=100, ball_timestamp_ms=5.0)
+        assert result.spin_rpm == 0, (
+            f"18000 RPM should be rejected, got {result.spin_rpm} RPM"
+        )
+
+    def test_medium_snr_low_cycles_gets_reduced_confidence(self):
+        """SNR >= 5 but < 3 seam cycles should score 0.5, not 0.7."""
+        processor = RollingBufferProcessor()
+        i_samples, q_samples = self._make_iq_with_seam_modulation(
+            base_speed_mph=130, spin_rpm=4000, modulation_depth=0.04,
+            num_samples=700,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.003,
+            i_samples=i_samples, q_samples=q_samples,
+        )
+        result = processor.detect_spin(capture, ball_speed_mph=130, ball_timestamp_ms=1.0)
+        if result.spin_rpm > 0:
+            assert result.confidence <= 0.5, (
+                f"Low-cycle detection should cap at 0.5, got {result.confidence}"
+            )
+
+    def test_weak_modulation_caps_confidence(self):
+        """Modulation depth < 1% should cap confidence at 0.5 max."""
+        processor = RollingBufferProcessor()
+        i_samples, q_samples = self._make_iq_with_seam_modulation(
+            base_speed_mph=130, spin_rpm=5000, modulation_depth=0.008,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
+        )
+        result = processor.detect_spin(capture, ball_speed_mph=130, ball_timestamp_ms=5.0)
+        if result.spin_rpm > 0:
+            assert result.confidence <= 0.5, (
+                f"Weak modulation should cap at 0.5, got {result.confidence}"
+            )
+
+    def test_strong_spin_still_scores_high(self):
+        """Clean spin with good SNR and many cycles should still score >= 0.8."""
+        processor = RollingBufferProcessor()
+        i_samples, q_samples = self._make_iq_with_seam_modulation(
+            base_speed_mph=120, spin_rpm=7000, modulation_depth=0.03,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
+        )
+        result = processor.detect_spin(capture, ball_speed_mph=120, ball_timestamp_ms=5.0)
+        assert result.spin_rpm > 0, f"Should detect spin, got quality={result.quality}"
+        assert result.confidence >= 0.8, (
+            f"Strong spin should score >= 0.8, got {result.confidence}"
+        )
