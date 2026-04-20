@@ -155,3 +155,132 @@ class TestDetectKld7Ports:
     def test_empty_list(self, mock_comports):
         mock_comports.return_value = []
         assert diagnose.detect_kld7_ports() == []
+
+
+class TestCheckOps243Connectivity:
+    @patch("diagnose.detect_ops243_port")
+    def test_returns_skip_when_no_port(self, mock_detect):
+        mock_detect.return_value = None
+        state = diagnose.DiagnosticState()
+        result = diagnose.check_ops243_connectivity(state)
+        assert result.status == "skip"
+        assert "no OPS243" in result.detail
+        assert state.ops243_port is None
+
+    @patch("diagnose.detect_ops243_port")
+    @patch("diagnose.OPS243Radar")
+    def test_returns_pass_when_connects_and_returns_version(
+        self, mock_radar_class, mock_detect,
+    ):
+        mock_detect.return_value = "/dev/ttyACM0"
+        mock_radar = MagicMock()
+        mock_radar.get_firmware_version.return_value = "1.2.3"
+        mock_radar_class.return_value = mock_radar
+
+        state = diagnose.DiagnosticState()
+        result = diagnose.check_ops243_connectivity(state)
+
+        assert result.status == "pass"
+        assert "/dev/ttyACM0" in result.detail
+        assert "1.2.3" in result.detail
+        assert state.ops243_port == "/dev/ttyACM0"
+        assert state.ops243_radar is mock_radar
+
+    @patch("diagnose.detect_ops243_port")
+    @patch("diagnose.OPS243Radar")
+    def test_returns_fail_on_connect_exception(
+        self, mock_radar_class, mock_detect,
+    ):
+        mock_detect.return_value = "/dev/ttyACM0"
+        mock_radar = MagicMock()
+        mock_radar.connect.side_effect = OSError("Permission denied")
+        mock_radar_class.return_value = mock_radar
+
+        state = diagnose.DiagnosticState()
+        result = diagnose.check_ops243_connectivity(state)
+
+        assert result.status == "fail"
+        assert "Permission denied" in result.detail
+        assert "dialout" in result.hint.lower()
+
+
+class TestCheckOps243RollingBufferPersisted:
+    def test_skipped_when_no_radar_in_state(self):
+        state = diagnose.DiagnosticState()
+        result = diagnose.check_ops243_rolling_buffer_persisted(state)
+        assert result.status == "skip"
+
+    def test_pass_when_no_data_streams(self):
+        state = diagnose.DiagnosticState()
+        mock_radar = MagicMock()
+        mock_radar.serial.in_waiting = 0
+        mock_radar.serial.read.return_value = b""
+        state.ops243_radar = mock_radar
+
+        result = diagnose.check_ops243_rolling_buffer_persisted(state)
+
+        assert result.status == "pass"
+        assert "rolling buffer" in result.detail.lower()
+
+    def test_fail_when_data_streams(self):
+        state = diagnose.DiagnosticState()
+        mock_radar = MagicMock()
+        mock_radar.serial.in_waiting = 42
+        mock_radar.serial.read.return_value = b'{"speed": 12.5}\n'
+        state.ops243_radar = mock_radar
+
+        result = diagnose.check_ops243_rolling_buffer_persisted(state)
+
+        assert result.status == "fail"
+        assert "streaming" in result.detail.lower() or "cw mode" in result.detail.lower()
+        assert "test_rolling_buffer_persist.py --setup" in result.hint
+
+
+class TestCheckOps243SoftwareTrigger:
+    def test_skipped_when_no_radar(self):
+        state = diagnose.DiagnosticState()
+        result = diagnose.check_ops243_software_trigger(state)
+        assert result.status == "skip"
+
+    @patch("diagnose.RollingBufferProcessor")
+    def test_pass_with_valid_capture(self, mock_processor_class):
+        state = diagnose.DiagnosticState()
+        state.ops243_radar = MagicMock()
+        state.ops243_radar.trigger_capture.return_value = '{"I":[...]}...'
+
+        mock_capture = MagicMock()
+        mock_capture.i_samples = [0] * 4096
+        mock_capture.q_samples = [0] * 4096
+        mock_processor = MagicMock()
+        mock_processor.parse_capture.return_value = mock_capture
+        mock_processor_class.return_value = mock_processor
+
+        result = diagnose.check_ops243_software_trigger(state)
+
+        assert result.status == "pass"
+        assert "4096" in result.detail
+
+    def test_fail_on_empty_response(self):
+        state = diagnose.DiagnosticState()
+        state.ops243_radar = MagicMock()
+        state.ops243_radar.trigger_capture.return_value = ""
+
+        result = diagnose.check_ops243_software_trigger(state)
+
+        assert result.status == "fail"
+        assert "no I/Q response" in result.detail or "no response" in result.detail.lower()
+
+    @patch("diagnose.RollingBufferProcessor")
+    def test_fail_on_unparseable_response(self, mock_processor_class):
+        state = diagnose.DiagnosticState()
+        state.ops243_radar = MagicMock()
+        state.ops243_radar.trigger_capture.return_value = "garbage"
+
+        mock_processor = MagicMock()
+        mock_processor.parse_capture.return_value = None
+        mock_processor_class.return_value = mock_processor
+
+        result = diagnose.check_ops243_software_trigger(state)
+
+        assert result.status == "fail"
+        assert "parse" in result.detail.lower()
