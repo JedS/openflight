@@ -401,6 +401,7 @@ def init_kld7(port=None, orientation="vertical", angle_offset_deg=0.0, base_freq
         tracker = KLD7Tracker(
             port=port, orientation=orientation,
             angle_offset_deg=angle_offset_deg, base_freq=base_freq,
+            buffer_seconds=6.0,
         )
         if tracker.connect():
             tracker.start()
