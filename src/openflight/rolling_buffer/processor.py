@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
 
+from ..launch_monitor import SPIN_CONFIDENCE_HIGH
 from .types import (
     IQCapture,
     ProcessedCapture,
@@ -484,6 +485,7 @@ class RollingBufferProcessor:
 
         # Check modulation depth before proceeding. Real seam modulation
         # creates 1-5% amplitude variation; quantization noise creates <0.5%.
+        weak_modulation = False
         envelope_mean = np.mean(ball_envelope)
         envelope_std = np.std(ball_envelope)
         if envelope_mean > 0:
@@ -492,6 +494,11 @@ class RollingBufferProcessor:
                 return SpinResult.no_spin_detected(
                     f"Modulation depth too low ({modulation_depth:.4f})"
                 )
+
+            # Flag weak modulation — above the noise floor (0.5%) but below
+            # the level where we trust the envelope FFT peak (1%). Caps
+            # confidence later to prevent marginal signals scoring 0.7+.
+            weak_modulation = modulation_depth < 0.01
 
         # Remove DC and apply Hann window
         ball_envelope -= envelope_mean
@@ -529,6 +536,15 @@ class RollingBufferProcessor:
 
         # Seam frequency to spin RPM (seam = 1x spin, one seam crossing per revolution)
         spin_rpm = peak_freq * 60
+
+        # Hard ceiling — reject anything above physical maximum.
+        # The FFT mask should enforce this, but the autocorrelation override
+        # path can bypass it. Belt-and-suspenders.
+        max_rpm = self.SPIN_MAX_SEAM_HZ * 60
+        if spin_rpm > max_rpm:
+            return SpinResult.no_spin_detected(
+                f"Spin {spin_rpm:.0f} RPM exceeds physical maximum ({max_rpm:.0f})"
+            )
 
         # Check minimum cycles in window
         window_seconds = len(ball_envelope) / self.SAMPLE_RATE
@@ -593,15 +609,28 @@ class RollingBufferProcessor:
         if fft_snr >= self.SPIN_SNR_HIGH and seam_cycles >= 5:
             quality = "high"
             confidence = 0.9
-        elif fft_snr >= self.SPIN_SNR_MEDIUM or autocorr_confirmed:
+        elif fft_snr >= self.SPIN_SNR_HIGH and seam_cycles >= 3:
+            quality = "high"
+            confidence = 0.8
+        elif fft_snr >= self.SPIN_SNR_MEDIUM and (seam_cycles >= 3 or autocorr_confirmed):
             quality = "medium"
-            confidence = 0.7
+            confidence = SPIN_CONFIDENCE_HIGH
+        elif fft_snr >= self.SPIN_SNR_MEDIUM or autocorr_confirmed:
+            quality = "low"
+            confidence = 0.5
         elif fft_snr >= self.SPIN_SNR_MIN:
             quality = "low"
-            confidence = 0.4
+            confidence = 0.3
         else:
             quality = "low"
             confidence = 0.3
+
+        # Weak modulation caps confidence — the envelope FFT peak may be
+        # noise rather than real seam modulation.
+        if weak_modulation:
+            confidence = min(confidence, 0.5)
+            if quality == "high":
+                quality = "medium"
 
         return SpinResult(
             spin_rpm=round(spin_rpm),

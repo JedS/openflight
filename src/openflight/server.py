@@ -401,6 +401,7 @@ def init_kld7(port=None, orientation="vertical", angle_offset_deg=0.0, base_freq
         tracker = KLD7Tracker(
             port=port, orientation=orientation,
             angle_offset_deg=angle_offset_deg, base_freq=base_freq,
+            buffer_seconds=6.0,
         )
         if tracker.connect():
             tracker.start()
@@ -995,16 +996,22 @@ def on_shot_detected(shot: Shot):
                     ball_speed_mph=shot.ball_speed_mph,
                 )
                 if kld7_angle_h and kld7_angle_h.horizontal_deg is not None:
-                    shot.launch_angle_horizontal = kld7_angle_h.horizontal_deg
-                    if shot.angle_source is None:
-                        shot.angle_source = "radar"
-                    if shot.launch_angle_confidence is None:
-                        shot.launch_angle_confidence = kld7_angle_h.confidence
-                    logger.info(
-                        "[SERVER] Horizontal angle: %.1f° (conf=%.0f%%, %d frames)",
-                        kld7_angle_h.horizontal_deg, kld7_angle_h.confidence * 100,
-                        kld7_angle_h.num_frames,
-                    )
+                    if abs(kld7_angle_h.horizontal_deg) <= 15.0:
+                        shot.launch_angle_horizontal = kld7_angle_h.horizontal_deg
+                        if shot.angle_source is None:
+                            shot.angle_source = "radar"
+                        if shot.launch_angle_confidence is None:
+                            shot.launch_angle_confidence = kld7_angle_h.confidence
+                        logger.info(
+                            "[SERVER] Horizontal angle: %.1f° (conf=%.0f%%, %d frames)",
+                            kld7_angle_h.horizontal_deg, kld7_angle_h.confidence * 100,
+                            kld7_angle_h.num_frames,
+                        )
+                    else:
+                        logger.warning(
+                            "[SERVER] Horizontal angle %.1f° rejected: exceeds ±15°",
+                            kld7_angle_h.horizontal_deg,
+                        )
                 if session_log and raw_buffer_h:
                     session_log.log_kld7_buffer(
                         shot_number=session_log.stats.get("shots_detected", 0) + 1,

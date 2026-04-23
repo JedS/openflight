@@ -12,9 +12,8 @@ from typing import List, Optional
 
 from .ops243 import SpeedReading
 
-# Canonical threshold separating "high" from "medium" spin-measurement
-# confidence. Used by Shot.spin_quality and by ballistics.resolve_launch
-# (which only trusts measured spin at "high" confidence).
+# Spin confidence threshold for "high" quality — used across modules.
+# Measured spin is trusted for physics simulation only above this level.
 SPIN_CONFIDENCE_HIGH = 0.7
 
 

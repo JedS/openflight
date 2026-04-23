@@ -6,9 +6,12 @@ angle extraction from K-LD7 24 GHz radar raw ADC data.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 RADC_PAYLOAD_BYTES = 3072
 SAMPLES_PER_CHANNEL = 256
@@ -282,6 +285,7 @@ def extract_launch_angle(
     angle_offset_deg: float = 0.0,
     ops243_ball_speed_mph: float | None = None,
     speed_tolerance_mph: float = 10.0,
+    orientation: str | None = None,
 ) -> list[dict]:
     """Extract vertical launch angle per shot from RADC frames.
 
@@ -420,6 +424,23 @@ def extract_launch_angle(
             continue
         weighted_angle = float(np.sum(clean_angs * w) / total_w)
         corrected_angle = weighted_angle + angle_offset_deg
+
+        # Hard physical bounds — reject obvious outliers before they
+        # reach the Shot object. Orientation-aware: vertical [0°, 45°],
+        # horizontal [-15°, +15°]. When orientation is None (offline
+        # analysis), skip bounds filtering.
+        if orientation == "vertical" and not (0.0 <= corrected_angle <= 45.0):
+            logger.info(
+                "[RADC] Vertical angle %.1f° outside [0, 45] — rejected",
+                corrected_angle,
+            )
+            continue
+        if orientation == "horizontal" and abs(corrected_angle) > 15.0:
+            logger.info(
+                "[RADC] Horizontal angle %.1f° outside ±15° — rejected",
+                corrected_angle,
+            )
+            continue
 
         avg_speed_mph = float(np.mean(peak_speeds_mph))
         angle_std = float(np.std(clean_angs))

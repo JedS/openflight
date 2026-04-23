@@ -7,13 +7,14 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "vitest run",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "preview": "vite preview"
   },
   "dependencies": {
     "react": "^19.2.5",
-    "react-dom": "^19.2.0",
+    "react-dom": "^19.2.5",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
@@ -28,7 +29,8 @@
     "globals": "^17.4.0",
     "prettier": "^3.5.3",
     "typescript": "~5.9.3",
-    "typescript-eslint": "^8.58.1",
-    "vite": "^7.2.4"
+    "typescript-eslint": "^8.46.4",
+    "vite": "^7.2.4",
+    "vitest": "^4.1.4"
   }
 }

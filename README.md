@@ -140,6 +140,28 @@ with LaunchMonitor() as monitor:
 - **Spin detection**: ~50-60% reliable — depends on signal quality and trigger timing
 - **K-LD7 speed aliasing**: The K-LD7 max speed is 62 mph, so it's used only for angle/distance, not speed
 
+### Ball Markings
+
+Reflective markings (aluminum stickers, painted dots) noticeably improve K-LD7 launch-angle extraction — the stronger return gives multi-frame tracking, higher SNR, and more confident angles. However, a specular patch produces a pulsed, non-sinusoidal amplitude modulation that the spin detector can't interpret as seam modulation, so measured spin degrades (typically locks to the top of the valid frequency band with low confidence). Low-confidence spin automatically falls back to club-typical values in the ballistics model, so the net effect of marking a ball is better angles with no worse carry estimates. A thin painted stripe (rather than a patch) is a reasonable middle ground if you want both — it rotates through the beam more like a seam.
+
+## Hardware Diagnostic
+
+To verify every component of your build in one shot:
+
+```bash
+uv run python scripts/hardware-test/diagnose.py
+```
+
+The diagnostic walks through 6 checks:
+1. OPS243 connectivity
+2. OPS243 rolling buffer mode persistence
+3. OPS243 software trigger
+4. K-LD7 vertical (launch angle)
+5. K-LD7 horizontal (aim direction, optional)
+6. Sound trigger end-to-end (interactive — prompts you to clap near the sensor)
+
+Missing optional hardware (like the horizontal K-LD7) is reported as a skip rather than a failure. Pass `--require-all` to fail on skips, or `--no-interactive` to skip the sound-trigger prompt in unattended runs.
+
 ## Project Structure
 
 ```
