@@ -520,3 +520,78 @@ class TestOnShotDetected:
 
         assert shot.angle_source == "radar"
         assert shot.launch_angle_vertical == pytest.approx(18.7)
+
+
+class TestCarryComputation:
+    """Tests for the ballistic carry path in on_shot_detected."""
+
+    def _patch_environment(self, monkeypatch):
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+    def test_carry_uses_ballistic_simulator_when_launch_angle_present(self, monkeypatch):
+        """A shot with a vertical launch angle should get carry from the physics sim."""
+        self._patch_environment(monkeypatch)
+
+        captured = {}
+
+        from openflight import ballistics as ballistics_module
+        real_simulate = ballistics_module.simulate
+
+        def spying_simulate(conditions, *args, **kwargs):
+            captured["conditions"] = conditions
+            return real_simulate(conditions, *args, **kwargs)
+
+        monkeypatch.setattr(server_module, "simulate", spying_simulate)
+
+        shot = Shot(
+            ball_speed_mph=165.0,
+            club_speed_mph=112.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+            launch_angle_vertical=11.0,
+            launch_angle_confidence=0.8,
+            spin_rpm=2700,
+            spin_confidence=0.85,
+            angle_source="radar",
+        )
+
+        on_shot_detected(shot)
+
+        assert "conditions" in captured, "simulate() should have been called"
+        assert captured["conditions"].spin_source == "measured"
+        assert shot.carry_spin_adjusted is not None
+        assert 250 < shot.carry_spin_adjusted < 300
+
+    def test_carry_falls_back_to_table_when_resolve_returns_none(self, monkeypatch):
+        """When resolve_launch returns None, the table path should compute carry."""
+        self._patch_environment(monkeypatch)
+
+        monkeypatch.setattr(server_module, "resolve_launch", lambda shot: None)
+
+        def fail_simulate(*args, **kwargs):
+            raise AssertionError("simulate() must not be called when resolve_launch is None")
+
+        monkeypatch.setattr(server_module, "simulate", fail_simulate)
+
+        shot = Shot(
+            ball_speed_mph=150.0,
+            club_speed_mph=105.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+            launch_angle_vertical=12.0,
+            spin_rpm=2700,
+            spin_confidence=0.85,
+            angle_source="radar",
+        )
+
+        on_shot_detected(shot)
+
+        assert shot.carry_spin_adjusted is not None
+        assert shot.carry_spin_adjusted > 0
