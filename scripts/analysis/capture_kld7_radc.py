@@ -12,7 +12,10 @@ Usage:
     # K-LD7 only (no OPS243)
     ./scripts/capture_kld7_radc.py --port /dev/ttyUSB0 --duration 60
 
-    # Both radars
+    # Both radars, OPS243 auto-detected
+    ./scripts/capture_kld7_radc.py --port /dev/ttyUSB0 --ops243 --duration 60
+
+    # Both radars, OPS243 port specified explicitly
     ./scripts/capture_kld7_radc.py --port /dev/ttyUSB0 --ops243-port /dev/ttyACM0 --duration 60
 
 Output:
@@ -217,7 +220,10 @@ def main():
     parser.add_argument("--orientation", default="vertical", choices=["vertical", "horizontal"])
 
     # OPS243 args
-    parser.add_argument("--ops243-port", default=None, help="OPS243 serial port (omit to skip)")
+    parser.add_argument("--ops243", action="store_true",
+                        help="Enable OPS243 capture (auto-detects port unless --ops243-port given)")
+    parser.add_argument("--ops243-port", default=None,
+                        help="OPS243 serial port (implies --ops243; omit for auto-detect)")
 
     # General
     parser.add_argument("--duration", type=int, default=60, help="Capture duration in seconds")
@@ -254,10 +260,28 @@ def main():
         suffix = f"-{args.club}" if args.club else ""
         output_path = output_dir / f"kld7_radc_{timestamp}{suffix}.pkl"
 
-    # Connect OPS243 if requested
+    # Connect OPS243 if requested. --ops243-port implies --ops243.
     ops243 = None
-    if args.ops243_port:
-        ops243 = OPS243RollingBufferReader(args.ops243_port)
+    ops243_enabled = args.ops243 or bool(args.ops243_port)
+    ops243_port = args.ops243_port
+    if ops243_enabled and ops243_port is None:
+        # Auto-detect using the same VID/description heuristics as OPS243Radar.
+        try:
+            from openflight.ops243 import OPS243Radar
+            candidates = OPS243Radar.find_radar_ports()
+        except Exception as e:
+            print(f"OPS243 auto-detect failed: {e}")
+            candidates = []
+        if not candidates:
+            print("OPS243 auto-detect found no radar; specify --ops243-port or omit --ops243.")
+        else:
+            ops243_port = candidates[0]
+            if len(candidates) > 1:
+                print(f"OPS243 auto-detect: multiple candidates {candidates}, using {ops243_port}")
+            else:
+                print(f"OPS243 auto-detect: {ops243_port}")
+    if ops243_enabled and ops243_port:
+        ops243 = OPS243RollingBufferReader(ops243_port)
         if not ops243.connect():
             print("Continuing without OPS243.")
             ops243 = None
@@ -267,7 +291,7 @@ def main():
     print("=" * 60)
     print(f"  K-LD7 port:  {port}")
     print(f"  K-LD7 baud:  {args.baud}")
-    print(f"  OPS243:      {args.ops243_port or 'disabled'}")
+    print(f"  OPS243:      {ops243_port or 'disabled'}")
     print(f"  Duration:    {args.duration}s")
     print(f"  Orientation: {args.orientation}")
     print(f"  Output:      {output_path}")
@@ -301,7 +325,7 @@ def main():
         "port": port,
         "baud_rate": args.baud,
         "orientation": args.orientation,
-        "ops243_port": args.ops243_port,
+        "ops243_port": ops243_port,
         "ops243_enabled": ops243 is not None,
         "capture_start": datetime.now().isoformat(),
         "params": all_params,
