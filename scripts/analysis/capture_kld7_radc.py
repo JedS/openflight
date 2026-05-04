@@ -264,6 +264,94 @@ class OPS243RollingBufferReader:
             return list(self.captures)
 
 
+def _baseline_clutter_report(frames: list, fft_size: int = 2048,
+                             max_speed_kmh: float = 100.0,
+                             top_n: int = 10) -> None:
+    """Per-frame FFT, median magnitude per bin, print top-N persistent
+    peaks. Used to spot static clutter sources (fans, mats, etc.).
+
+    Persistent peaks (high MEDIAN magnitude) are clutter; transient
+    peaks (high MAX, low median) are normal moving targets passing
+    through the beam during the scan.
+    """
+    try:
+        import numpy as np
+        # Reuse the project FFT path so the same DC mask is applied.
+        from openflight.kld7.radc import (
+            DC_MASK_BINS, bin_to_velocity_kmh, compute_spectrum,
+            parse_radc_payload, to_complex_iq,
+        )
+    except ImportError as e:
+        print(f"  (baseline analysis unavailable: {e})")
+        return
+
+    radc_frames = [f for f in frames if f.get("radc") is not None]
+    if not radc_frames:
+        print("  No RADC frames in capture — nothing to analyze.")
+        return
+
+    spec_grid = np.zeros((len(radc_frames), fft_size), dtype=np.float32)
+    for i, fr in enumerate(radc_frames):
+        try:
+            ch = parse_radc_payload(fr["radc"])
+            iq = to_complex_iq(ch["f1a_i"], ch["f1a_q"])
+            spec_grid[i] = compute_spectrum(iq, fft_size=fft_size)
+        except (ValueError, KeyError):
+            continue
+
+    median_mag = np.median(spec_grid, axis=0)
+    # Mask out the DC region — always loud, never useful for clutter detection.
+    median_mag[:DC_MASK_BINS] = 0.0
+    median_mag[fft_size - DC_MASK_BINS:] = 0.0
+
+    nonzero = median_mag[median_mag > 0]
+    noise_floor = float(np.median(nonzero)) if nonzero.size else 0.0
+
+    # Top-N peaks by median magnitude
+    top_indices = np.argsort(median_mag)[-top_n:][::-1]
+
+    print()
+    print("=" * 70)
+    print("  BASELINE CLUTTER SCAN")
+    print("=" * 70)
+    print(f"  Frames analyzed:  {len(radc_frames)}")
+    print(f"  Noise floor:      {noise_floor:.2f} (median of non-zero bins)")
+    print()
+    print(f"  Top {top_n} persistent peaks (by median magnitude across frames):")
+    print(f"  {'rank':>4}  {'bin':>5}  {'velocity':>11}  "
+          f"{'med mag':>10}  {'×floor':>7}  {'note':<30}")
+    flagged = False
+    for rank, b in enumerate(top_indices, 1):
+        mag = float(median_mag[b])
+        vel = bin_to_velocity_kmh(int(b), fft_size, max_speed_kmh)
+        ratio = mag / noise_floor if noise_floor > 0 else 0.0
+        note = ""
+        if ratio >= 50.0:
+            note = "STRONG CLUTTER — investigate"
+            flagged = True
+        elif ratio >= 10.0:
+            note = "elevated; possible clutter"
+        print(
+            f"  {rank:>4}  {int(b):>5}  {vel:>+8.1f} km/h  "
+            f"{mag:>10.2f}  {ratio:>6.1f}×  {note:<30}"
+        )
+    print()
+    if flagged:
+        print("  WARNING: persistent-bin magnitudes >50× the noise floor")
+        print("  indicate a stationary or repetitive moving clutter source")
+        print("  (fan blade, vibrating mat, fluorescent ballast, neighbor's")
+        print("  car, etc.) somewhere in the radar's field of view. The")
+        print("  live algorithm's OPS-bin penalty will downweight these")
+        print("  detections, but heavy clutter can still drop the ball")
+        print("  detection rate. Find and remove the source if possible.")
+    else:
+        print("  No persistent strong clutter detected — radar field of view")
+        print("  appears clean. If the live algorithm still misses shots,")
+        print("  the issue is more likely with mounting orientation or")
+        print("  ball-detection SNR than with clutter.")
+    print("=" * 70)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Capture K-LD7 raw ADC data with optional OPS243 speed reference.",
@@ -285,7 +373,22 @@ def main():
     parser.add_argument("--club", default=None, help="Club label for metadata")
     parser.add_argument("--shots", type=int, default=None, help="Expected shot count")
     parser.add_argument("--notes", default=None, help="Freeform notes")
+    parser.add_argument(
+        "--baseline", action="store_true",
+        help="Clutter scan mode. Stream the K-LD7 only (no OPS243, no "
+        "shots) and after capture print the FFT bins with the strongest "
+        "persistent (median) magnitude. Use to identify static clutter "
+        "sources (fans, vibrating mats, etc.) that the live algorithm's "
+        "OPS-bin penalty would flag.",
+    )
     args = parser.parse_args()
+
+    # Baseline mode: force OPS243 off, set a sensible default duration.
+    if args.baseline:
+        args.ops243 = False
+        args.ops243_port = None
+        if args.duration == 60:  # default unchanged → use a shorter scan
+            args.duration = 5
 
     # Resolve K-LD7 port — orientation-aware (prefer udev symlink).
     port = args.port
@@ -381,6 +484,17 @@ def main():
         sys.exit(1)
     print(f"  Connected: {kld7}")
 
+    # Patch _read_packet for USB Full Speed short reads — same patch
+    # the live tracker applies. Without it, the kld7 library aborts
+    # on every "Failed to read all of reply" and cascades into stream
+    # failures.
+    try:
+        from openflight.kld7.serial_io import install_robust_read_packet
+        install_robust_read_packet(kld7)
+    except ImportError as e:
+        print(f"  WARN: robust _read_packet patch unavailable ({e}); "
+              "stream may fail with short-read errors")
+
     print("Configuring for golf...")
     configure_for_golf(kld7)
     all_params = read_all_params(kld7)
@@ -417,9 +531,14 @@ def main():
     start_time = time.time()
 
     print("-" * 60)
-    print(f"Streaming RADC + PDAT + TDAT for {args.duration}s (Ctrl+C to stop)")
-    if ops243:
-        print("OPS243 rolling buffer armed, waiting for sound triggers")
+    if args.baseline:
+        print(f"BASELINE CLUTTER SCAN — streaming for {args.duration}s")
+        print("Stand still; do not swing. We're looking for persistent peaks")
+        print("from static or repetitively-moving clutter sources.")
+    else:
+        print(f"Streaming RADC + PDAT + TDAT for {args.duration}s (Ctrl+C to stop)")
+        if ops243:
+            print("OPS243 rolling buffer armed, waiting for sound triggers")
     print("-" * 60)
 
     try:
@@ -516,6 +635,9 @@ def main():
 
     print(f"  Done ({output_path.stat().st_size / 1024:.0f} KB)")
     print("=" * 60)
+
+    if args.baseline:
+        _baseline_clutter_report(frames)
 
 
 if __name__ == "__main__":

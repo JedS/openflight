@@ -213,39 +213,11 @@ class KLD7Tracker:
 
         logger.info("[KLD7] Stream started: RADC only (3Mbaud, %s)", self.orientation)
 
-        # Monkey-patch the library's _read_packet to handle short reads.
-        # At 12M USB Full Speed, the FTDI driver splits large packets across
-        # USB microframes. serial.read(length) returns whatever's available,
-        # giving a short read. The library prints "Failed to read all of reply"
-        # and continues with a truncated packet, causing cascading errors.
-        # This patch retries the read until we get all expected bytes.
-        import struct
-        original_read_packet = self._radar._read_packet.__func__
-
-        def _robust_read_packet(device):
-            if device._port is None:
-                raise KLD7Exception("serial port has been closed")
-            header = device._port.read(8)
-            if len(header) == 0:
-                raise KLD7Exception("Timeout waiting for reply")
-            if len(header) != 8:
-                raise KLD7Exception("Wrong length reply")
-            reply, length = struct.unpack("<4sI", header)
-            reply = reply.decode("ASCII")
-            if length != 0:
-                payload = b""
-                remaining = length
-                while remaining > 0:
-                    chunk = device._port.read(remaining)
-                    if not chunk:
-                        break
-                    payload += chunk
-                    remaining -= len(chunk)
-            else:
-                payload = None
-            return reply, payload
-
-        self._radar._read_packet = lambda: _robust_read_packet(self._radar)
+        # Patch the library's _read_packet to handle USB Full Speed
+        # short reads (FTDI splits large packets across microframes).
+        # See serial_io.install_robust_read_packet for why.
+        from .serial_io import install_robust_read_packet
+        install_robust_read_packet(self._radar)
 
         while self._running and errors < max_errors:
             try:
