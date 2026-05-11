@@ -336,6 +336,26 @@ def shot_to_dict(shot: Shot) -> dict:
         "spin_rpm": round(shot.spin_rpm) if shot.spin_rpm else None,
         "spin_confidence": round(shot.spin_confidence, 2) if shot.spin_confidence else None,
         "spin_quality": shot.spin_quality,
+        "spin_snr": round(shot.spin_snr, 2) if shot.spin_snr is not None else None,
+        "spin_modulation_depth": (
+            round(shot.spin_modulation_depth, 4)
+            if shot.spin_modulation_depth is not None else None
+        ),
+        "spin_peak_freq_hz": (
+            round(shot.spin_peak_freq_hz, 2)
+            if shot.spin_peak_freq_hz is not None else None
+        ),
+        "spin_candidate_rpm": (
+            round(shot.spin_peak_freq_hz * 60)
+            if shot.spin_peak_freq_hz is not None else None
+        ),
+        "spin_seam_cycles": (
+            round(shot.spin_seam_cycles, 2)
+            if shot.spin_seam_cycles is not None else None
+        ),
+        "spin_at_lower_rail": shot.spin_at_lower_rail,
+        "spin_at_upper_rail": shot.spin_at_upper_rail,
+        "spin_rejection_reason": shot.spin_rejection_reason,
         "carry_spin_adjusted": round(shot.carry_spin_adjusted)
         if shot.carry_spin_adjusted
         else None,
@@ -1214,6 +1234,14 @@ def on_shot_detected(shot: Shot):
             shot.carry_spin_adjusted, spin_for_carry,
             "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
         )
+    if shot.spin_rejection_reason:
+        logger.info(
+            "[SERVER] Spin unavailable: %s (snr=%s, candidate=%s rpm)",
+            shot.spin_rejection_reason,
+            "%.2f" % shot.spin_snr if shot.spin_snr is not None else "N/A",
+            "%.0f" % (shot.spin_peak_freq_hz * 60)
+            if shot.spin_peak_freq_hz is not None else "N/A",
+        )
 
     # Log shot with all data (radar + spin + camera) in one entry
     try:
@@ -1231,6 +1259,13 @@ def on_shot_detected(shot: Shot):
                 spin_rpm=shot.spin_rpm,
                 spin_confidence=shot.spin_confidence,
                 spin_quality=shot.spin_quality,
+                spin_snr=shot.spin_snr,
+                spin_modulation_depth=shot.spin_modulation_depth,
+                spin_peak_freq_hz=shot.spin_peak_freq_hz,
+                spin_seam_cycles=shot.spin_seam_cycles,
+                spin_at_lower_rail=shot.spin_at_lower_rail,
+                spin_at_upper_rail=shot.spin_at_upper_rail,
+                spin_rejection_reason=shot.spin_rejection_reason,
                 carry_spin_adjusted=shot.carry_spin_adjusted,
                 mode=shot.mode,
                 launch_angle_vertical=shot.launch_angle_vertical,

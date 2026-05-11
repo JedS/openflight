@@ -87,6 +87,23 @@ class TestShotToDict:
         result = shot_to_dict(shot)
         assert result["angle_source"] is None
 
+    def test_spin_diagnostics_included(self):
+        """Rejected spin diagnostics should be present in UI payloads."""
+        shot = Shot(
+            ball_speed_mph=120.0,
+            timestamp=datetime.now(),
+            spin_snr=2.96,
+            spin_peak_freq_hz=95.21484375,
+            spin_rejection_reason="SNR too low (2.96, need 3.0)",
+        )
+
+        result = shot_to_dict(shot)
+
+        assert result["spin_rpm"] is None
+        assert result["spin_snr"] == 2.96
+        assert result["spin_candidate_rpm"] == 5713
+        assert result["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
+
 
 class TestEstimateLaunchAngle:
     """Tests for launch angle estimation from club type and ball speed."""

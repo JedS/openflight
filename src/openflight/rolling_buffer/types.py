@@ -161,6 +161,7 @@ class SpinResult:
     @classmethod
     def no_spin_detected(
         cls, reason: str = "No clear spin signal",
+        snr: float = 0.0,
         modulation_depth: Optional[float] = None,
         peak_freq_hz: Optional[float] = None,
         seam_cycles: Optional[float] = None,
@@ -171,7 +172,7 @@ class SpinResult:
         carried through so we can see *why* it failed in the JSONL.
         """
         return cls(
-            spin_rpm=0, confidence=0, snr=0, quality=reason,
+            spin_rpm=0, confidence=0, snr=round(snr, 2), quality=reason,
             modulation_depth=modulation_depth,
             peak_freq_hz=peak_freq_hz,
             seam_cycles=seam_cycles,

@@ -275,6 +275,13 @@ class SessionLogger:
         spin_rpm: Optional[float] = None,
         spin_confidence: Optional[float] = None,
         spin_quality: Optional[str] = None,
+        spin_snr: Optional[float] = None,
+        spin_modulation_depth: Optional[float] = None,
+        spin_peak_freq_hz: Optional[float] = None,
+        spin_seam_cycles: Optional[float] = None,
+        spin_at_lower_rail: Optional[bool] = None,
+        spin_at_upper_rail: Optional[bool] = None,
+        spin_rejection_reason: Optional[str] = None,
         carry_spin_adjusted: Optional[float] = None,
         mode: str = "rolling-buffer",
         launch_angle_vertical: Optional[float] = None,
@@ -301,6 +308,13 @@ class SessionLogger:
             spin_rpm: Spin rate in RPM (rolling buffer mode only)
             spin_confidence: Confidence of spin detection (rolling buffer mode only)
             spin_quality: Quality assessment ("high", "medium", "low")
+            spin_snr: Signal-to-noise ratio of spin detection
+            spin_modulation_depth: Envelope std/mean ratio
+            spin_peak_freq_hz: Frequency of the picked envelope-FFT peak
+            spin_seam_cycles: Seam cycles in analysis window
+            spin_at_lower_rail: True when peak landed near the low rail
+            spin_at_upper_rail: True when peak landed near the high rail
+            spin_rejection_reason: Human-readable reason if spin was rejected
             carry_spin_adjusted: Carry distance adjusted for spin (rolling buffer mode only)
             mode: Radar mode ("rolling-buffer" or "mock")
         """
@@ -322,6 +336,17 @@ class SessionLogger:
             "spin_rpm": spin_rpm,
             "spin_confidence": spin_confidence,
             "spin_quality": spin_quality,
+            "spin_snr": spin_snr,
+            "spin_modulation_depth": spin_modulation_depth,
+            "spin_peak_freq_hz": spin_peak_freq_hz,
+            "spin_candidate_rpm": (
+                round(spin_peak_freq_hz * 60)
+                if spin_peak_freq_hz is not None else None
+            ),
+            "spin_seam_cycles": spin_seam_cycles,
+            "spin_at_lower_rail": spin_at_lower_rail,
+            "spin_at_upper_rail": spin_at_upper_rail,
+            "spin_rejection_reason": spin_rejection_reason,
             "carry_spin_adjusted": carry_spin_adjusted,
             "mode": mode,
             "launch_angle_vertical": launch_angle_vertical,
@@ -658,6 +683,10 @@ class SessionLogger:
             "spin_snr": spin_snr,
             "spin_modulation_depth": spin_modulation_depth,
             "spin_peak_freq_hz": spin_peak_freq_hz,
+            "spin_candidate_rpm": (
+                round(spin_peak_freq_hz * 60)
+                if spin_peak_freq_hz is not None else None
+            ),
             "spin_seam_cycles": spin_seam_cycles,
             "spin_at_lower_rail": spin_at_lower_rail,
             "spin_at_upper_rail": spin_at_upper_rail,

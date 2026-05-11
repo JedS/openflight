@@ -583,6 +583,7 @@ class RollingBufferProcessor:
         if spin_rpm > max_rpm:
             return SpinResult.no_spin_detected(
                 f"Spin {spin_rpm:.0f} RPM exceeds physical maximum ({max_rpm:.0f})",
+                snr=fft_snr,
                 modulation_depth=modulation_depth,
                 peak_freq_hz=peak_freq,
                 at_upper_rail=at_upper_rail,
@@ -616,6 +617,7 @@ class RollingBufferProcessor:
             return SpinResult.no_spin_detected(
                 f"Upper-rail peak at {spin_rpm:.0f} RPM "
                 f"(SNR {fft_snr:.1f} below high threshold {self.SPIN_SNR_HIGH:.0f})",
+                snr=fft_snr,
                 modulation_depth=modulation_depth,
                 peak_freq_hz=peak_freq,
                 seam_cycles=seam_cycles,
@@ -639,6 +641,7 @@ class RollingBufferProcessor:
                 f"Lower-rail peak at {spin_rpm:.0f} RPM "
                 f"(mod {modulation_depth or 0:.4f}, "
                 f"envelope-DC leakage suspected)",
+                snr=fft_snr,
                 modulation_depth=modulation_depth,
                 peak_freq_hz=peak_freq,
                 seam_cycles=seam_cycles,
@@ -717,6 +720,7 @@ class RollingBufferProcessor:
             )
             return SpinResult.no_spin_detected(
                 f"Upper-rail peak at {spin_rpm:.0f} RPM (post-autocorr)",
+                snr=fft_snr,
                 modulation_depth=modulation_depth,
                 peak_freq_hz=peak_freq,
                 seam_cycles=seam_cycles,
@@ -733,6 +737,7 @@ class RollingBufferProcessor:
             )
             return SpinResult.no_spin_detected(
                 f"Lower-rail peak at {spin_rpm:.0f} RPM (post-autocorr)",
+                snr=fft_snr,
                 modulation_depth=modulation_depth,
                 peak_freq_hz=peak_freq,
                 seam_cycles=seam_cycles,
@@ -743,6 +748,7 @@ class RollingBufferProcessor:
         if seam_cycles < self.SPIN_MIN_CYCLES:
             return SpinResult.no_spin_detected(
                 f"Too few seam cycles ({seam_cycles:.1f}, need {self.SPIN_MIN_CYCLES})",
+                snr=fft_snr,
                 modulation_depth=modulation_depth,
                 peak_freq_hz=peak_freq,
                 seam_cycles=seam_cycles,
@@ -751,8 +757,15 @@ class RollingBufferProcessor:
             )
 
         if fft_snr < self.SPIN_SNR_MIN and not autocorr_confirmed:
+            logger.info(
+                "[PROCESSOR] Spin rejected: SNR %.2f below %.1f "
+                "(peak=%.0f RPM, cycles=%.1f, rail_lo=%s, rail_hi=%s)",
+                fft_snr, self.SPIN_SNR_MIN, spin_rpm, seam_cycles,
+                at_lower_rail, at_upper_rail,
+            )
             return SpinResult.no_spin_detected(
-                f"SNR too low ({fft_snr:.1f}, need {self.SPIN_SNR_MIN})",
+                f"SNR too low ({fft_snr:.2f}, need {self.SPIN_SNR_MIN:.1f})",
+                snr=fft_snr,
                 modulation_depth=modulation_depth,
                 peak_freq_hz=peak_freq,
                 seam_cycles=seam_cycles,
@@ -785,6 +798,15 @@ class RollingBufferProcessor:
             confidence = min(confidence, 0.5)
             if quality == "high":
                 quality = "medium"
+
+        # Low-edge picks can be real low-spin driver candidates, but
+        # real Trackman comparison sessions also show 3300-3500 RPM
+        # rail artifacts on irons/wedges. Keep the candidate visible for
+        # analysis, but never treat it as a reliable spin measurement.
+        if at_lower_rail:
+            confidence = min(confidence, 0.5)
+            if quality in ("high", "medium"):
+                quality = "low"
 
         return SpinResult(
             spin_rpm=round(spin_rpm),

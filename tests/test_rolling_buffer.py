@@ -1,32 +1,27 @@
 """Tests for rolling_buffer module."""
 
 import math
-import pytest
-import numpy as np
 from datetime import datetime
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock
 
+import numpy as np
+import pytest
 from openflight.launch_monitor import ClubType, Shot
 from openflight.rolling_buffer import (
-    # Types
     IQCapture,
+    ManualTrigger,
+    PollingTrigger,
+    ProcessedCapture,
+    RollingBufferProcessor,
     SpeedReading,
     SpeedTimeline,
     SpinResult,
-    ProcessedCapture,
-    # Processor
-    RollingBufferProcessor,
-    # Triggers
-    TriggerStrategy,
-    PollingTrigger,
     ThresholdTrigger,
-    ManualTrigger,
     create_trigger,
     # Monitor functions
     estimate_carry_with_spin,
     get_optimal_spin_for_ball_speed,
 )
-
 
 # =============================================================================
 # Tests for Optimal Spin Calculation
@@ -313,6 +308,19 @@ class TestSpinResult:
         )
         assert result.quality == "low"
 
+    def test_no_spin_detected_preserves_snr(self):
+        """Rejected spin should keep the measured SNR for diagnostics."""
+        result = SpinResult.no_spin_detected(
+            "SNR too low",
+            snr=2.96,
+            peak_freq_hz=95.21484375,
+            seam_cycles=4.8,
+        )
+        assert result.spin_rpm == 0
+        assert result.snr == pytest.approx(2.96)
+        assert result.peak_freq_hz == pytest.approx(95.21484375)
+        assert result.rejection_reason == "SNR too low"
+
 
 # =============================================================================
 # Tests for Rolling Buffer Processor
@@ -596,6 +604,96 @@ class TestShotWithSpin:
         )
         assert shot.spin_quality is None
 
+    def test_spin_quality_preserves_processor_label(self):
+        """Shot quality should use the processor label when available."""
+        shot = Shot(
+            ball_speed_mph=160.0,
+            timestamp=datetime.now(),
+            spin_rpm=5054.0,
+            spin_confidence=0.5,
+            spin_result_quality="low",
+        )
+        assert shot.spin_quality == "low"
+
+    def test_shot_accepts_rejected_spin_diagnostics(self):
+        """Rejected spin diagnostics should be representable on a shot."""
+        shot = Shot(
+            ball_speed_mph=120.0,
+            timestamp=datetime.now(),
+            spin_snr=2.96,
+            spin_peak_freq_hz=95.21484375,
+            spin_seam_cycles=4.8,
+            spin_rejection_reason="SNR too low (2.96, need 3.0)",
+        )
+        assert shot.spin_rpm is None
+        assert shot.spin_snr == pytest.approx(2.96)
+        assert shot.spin_peak_freq_hz == pytest.approx(95.21484375)
+        assert shot.spin_rejection_reason == "SNR too low (2.96, need 3.0)"
+
+
+# =============================================================================
+# Tests for monitor spin plausibility
+# =============================================================================
+
+class TestRollingBufferMonitorSpinPlausibility:
+    """Tests for club-aware filtering of spin artifacts."""
+
+    def _processed_with_spin(self, spin: SpinResult) -> ProcessedCapture:
+        return ProcessedCapture(
+            timeline=SpeedTimeline(readings=[], sample_rate_hz=937.5),
+            ball_speed_mph=100.0,
+            ball_timestamp_ms=60.0,
+            club_speed_mph=75.0,
+            spin=spin,
+        )
+
+    def test_lower_rail_spin_withheld_for_high_spin_club(self):
+        """PW/short-iron rail-low spin should be logged but not exposed."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="manual")
+        monitor.set_club(ClubType.PW)
+        processed = self._processed_with_spin(SpinResult(
+            spin_rpm=3296,
+            confidence=0.8,
+            snr=12.99,
+            quality="high",
+            peak_freq_hz=54.931640625,
+            seam_cycles=3.9,
+            at_lower_rail=True,
+        ))
+
+        shot = monitor._create_shot(processed)
+
+        assert shot is not None
+        assert shot.spin_rpm is None
+        assert shot.spin_snr == pytest.approx(12.99)
+        assert shot.spin_rejection_reason is not None
+        assert "plausibility floor" in shot.spin_rejection_reason
+
+    def test_lower_rail_driver_spin_can_still_pass(self):
+        """Low-spin driver candidates should not be rejected by club floor."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="manual")
+        monitor.set_club(ClubType.DRIVER)
+        processed = self._processed_with_spin(SpinResult(
+            spin_rpm=3296,
+            confidence=0.8,
+            snr=12.99,
+            quality="high",
+            peak_freq_hz=54.931640625,
+            seam_cycles=3.9,
+            at_lower_rail=True,
+        ))
+
+        shot = monitor._create_shot(processed)
+
+        assert shot is not None
+        assert shot.spin_rpm == 3296
+        assert shot.spin_quality == "high"
+        assert shot.spin_rejection_reason is None
+
 
 # =============================================================================
 # Integration Tests
@@ -610,9 +708,6 @@ class TestCarryCalculationIntegration:
         ball_speed = 167  # Tour average
         club_speed = 113  # Tour average
         spin = 2686  # Tour average
-
-        # Calculate optimal spin for validation
-        optimal_spin = get_optimal_spin_for_ball_speed(ball_speed, ClubType.DRIVER)
 
         # Calculate carry
         carry = estimate_carry_with_spin(
@@ -1784,6 +1879,28 @@ class TestSpinRailRejection:
         assert result.at_upper_rail is False, (
             "Interior peak should not flag at_upper_rail"
         )
+
+    def test_lower_rail_candidate_confidence_is_capped(self):
+        """Lower-rail candidates may be visible but must not be reliable."""
+        processor = RollingBufferProcessor()
+        i, q = self._amplitude_modulated_iq(
+            base_speed_mph=160.0,
+            mod_freq_hz=3000.0 / 60.0,
+            modulation_depth=0.03,
+        )
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i, q_samples=q,
+        )
+
+        result = processor.detect_spin(
+            capture, ball_speed_mph=160.0, ball_timestamp_ms=5.0,
+        )
+
+        assert result.spin_rpm > 0
+        assert result.at_lower_rail is True
+        assert result.confidence <= 0.5
+        assert result.is_reliable is False
 
 
 # =============================================================================

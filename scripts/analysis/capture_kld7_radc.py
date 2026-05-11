@@ -239,16 +239,32 @@ class OPS243RollingBufferReader:
                 processed = self.processor.process_capture(capture)
                 ball_speed = None
                 club_speed = None
-                spin_rpm = None
+                spin = None
                 if processed:
                     ball_speed = processed.ball_speed_mph
                     club_speed = processed.club_speed_mph
-                    if processed.spin:
-                        spin_rpm = processed.spin.spin_rpm
+                    spin = processed.spin
 
                 capture_entry["ball_speed_mph"] = ball_speed
                 capture_entry["club_speed_mph"] = club_speed
-                capture_entry["spin_rpm"] = spin_rpm
+                capture_entry["spin_rpm"] = spin.spin_rpm if spin else None
+                capture_entry["spin_confidence"] = spin.confidence if spin else None
+                capture_entry["spin_quality"] = spin.quality if spin else None
+                capture_entry["spin_snr"] = spin.snr if spin else None
+                capture_entry["spin_modulation_depth"] = (
+                    spin.modulation_depth if spin else None
+                )
+                capture_entry["spin_peak_freq_hz"] = spin.peak_freq_hz if spin else None
+                capture_entry["spin_candidate_rpm"] = (
+                    round(spin.peak_freq_hz * 60)
+                    if spin and spin.peak_freq_hz is not None else None
+                )
+                capture_entry["spin_seam_cycles"] = spin.seam_cycles if spin else None
+                capture_entry["spin_at_lower_rail"] = spin.at_lower_rail if spin else None
+                capture_entry["spin_at_upper_rail"] = spin.at_upper_rail if spin else None
+                capture_entry["spin_rejection_reason"] = (
+                    spin.rejection_reason if spin else None
+                )
 
                 with self._lock:
                     self.captures.append(capture_entry)
@@ -257,7 +273,17 @@ class OPS243RollingBufferReader:
 
                 speed_str = f"{ball_speed:.1f} mph" if ball_speed else "no speed"
                 club_str = f", club: {club_speed:.1f} mph" if club_speed else ""
-                spin_str = f", spin: {spin_rpm:.0f} rpm" if spin_rpm else ""
+                spin_str = ""
+                if spin and spin.spin_rpm > 0:
+                    spin_str = (
+                        f", spin: {spin.spin_rpm:.0f} rpm "
+                        f"(snr={spin.snr:.1f}, {spin.quality})"
+                    )
+                elif spin and spin.rejection_reason:
+                    spin_str = (
+                        f", spin: none ({spin.rejection_reason}, "
+                        f"snr={spin.snr:.1f})"
+                    )
                 print(f"\n  [OPS243] Trigger #{len(self.captures)}: {speed_str}{club_str}{spin_str}")
 
             except Exception as e:

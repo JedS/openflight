@@ -472,6 +472,15 @@ class RollingBufferMonitor:
                         "%.1f" % shot.club_speed_mph if shot.club_speed_mph else "N/A",
                         "%.0f" % shot.spin_rpm if shot.spin_rpm else "N/A"
                     )
+                    if shot.spin_rejection_reason:
+                        logger.info(
+                            "[MONITOR] Spin unavailable: %s (snr=%s, candidate=%s rpm)",
+                            shot.spin_rejection_reason,
+                            "%.2f" % shot.spin_snr
+                            if shot.spin_snr is not None else "N/A",
+                            "%.0f" % (shot.spin_peak_freq_hz * 60)
+                            if shot.spin_peak_freq_hz is not None else "N/A",
+                        )
 
                     # Log raw I/Q data and trigger events to session logger
                     session_logger = get_session_logger()
@@ -515,10 +524,7 @@ class RollingBufferMonitor:
                                 processed.spin.at_upper_rail
                                 if processed.spin else None
                             ),
-                            spin_rejection_reason=(
-                                processed.spin.rejection_reason
-                                if processed.spin else None
-                            ),
+                            spin_rejection_reason=shot.spin_rejection_reason,
                         )
 
                         # Log accepted trigger event
@@ -570,6 +576,12 @@ class RollingBufferMonitor:
                             "ball_speed_mph": shot.ball_speed_mph,
                             "club_speed_mph": shot.club_speed_mph,
                             "spin_rpm": shot.spin_rpm,
+                            "spin_snr": shot.spin_snr,
+                            "spin_candidate_rpm": (
+                                round(shot.spin_peak_freq_hz * 60)
+                                if shot.spin_peak_freq_hz is not None else None
+                            ),
+                            "spin_rejection_reason": shot.spin_rejection_reason,
                             "carry_yards": shot.estimated_carry_yards,
                         })
 
@@ -645,15 +657,36 @@ class RollingBufferMonitor:
             logger.debug("[MONITOR] Ball speed too low: %.1f mph", processed.ball_speed_mph)
             return None
 
-        # Calculate carry distance
-        # Use spin-adjusted carry only for reliable spin readings
-        has_reliable_spin = processed.has_spin and processed.spin
-        has_any_spin = processed.spin is not None and processed.spin.spin_rpm > 0
+        spin = processed.spin
+        spin_rejection_reason = spin.rejection_reason if spin else None
+        club_spin_rejection_reason = self._club_spin_rejection_reason(processed)
+        if club_spin_rejection_reason:
+            spin_rejection_reason = club_spin_rejection_reason
+            logger.warning(
+                "[MONITOR] Spin rejected by club plausibility: %s "
+                "(club=%s, ball=%.1f mph, candidate=%s rpm)",
+                club_spin_rejection_reason,
+                self._current_club.value,
+                processed.ball_speed_mph,
+                "%.0f" % spin.spin_rpm if spin else "N/A",
+            )
+
+        # Calculate carry distance.
+        # Use spin-adjusted carry only for reliable, plausible spin readings.
+        has_any_spin = (
+            spin is not None
+            and spin.spin_rpm > 0
+            and club_spin_rejection_reason is None
+        )
+        has_reliable_spin = bool(
+            processed.has_spin
+            and club_spin_rejection_reason is None
+        )
 
         if has_reliable_spin:
             carry = estimate_carry_with_spin(
                 processed.ball_speed_mph,
-                processed.spin.spin_rpm,
+                spin.spin_rpm,
                 self._current_club,
                 club_speed_mph=processed.club_speed_mph,
             )
@@ -662,8 +695,9 @@ class RollingBufferMonitor:
 
         # Always pass spin data through if detected (even low quality)
         # The UI shows confidence indicators so the user can judge
-        spin_rpm = processed.spin.spin_rpm if has_any_spin else None
-        spin_confidence = processed.spin.confidence if has_any_spin else None
+        spin_rpm = spin.spin_rpm if has_any_spin else None
+        spin_confidence = spin.confidence if has_any_spin else None
+        spin_result_quality = spin.quality if has_any_spin else None
 
         # Create shot with extended fields
         shot = Shot(
@@ -675,11 +709,63 @@ class RollingBufferMonitor:
             club=self._current_club,
             spin_rpm=spin_rpm,
             spin_confidence=spin_confidence,
+            spin_result_quality=spin_result_quality,
+            spin_snr=spin.snr if spin else None,
+            spin_modulation_depth=spin.modulation_depth if spin else None,
+            spin_peak_freq_hz=spin.peak_freq_hz if spin else None,
+            spin_seam_cycles=spin.seam_cycles if spin else None,
+            spin_at_lower_rail=spin.at_lower_rail if spin else None,
+            spin_at_upper_rail=spin.at_upper_rail if spin else None,
+            spin_rejection_reason=spin_rejection_reason,
             carry_spin_adjusted=carry if has_reliable_spin else None,
             mode="rolling-buffer",
         )
 
         return shot
+
+    def _club_spin_rejection_reason(
+        self,
+        processed: ProcessedCapture,
+    ) -> Optional[str]:
+        """Reject lower-rail spin candidates that are implausible for the
+        selected club.
+
+        The OPS envelope FFT can lock onto the low edge of the search band
+        around 3300-3500 RPM. That can be real for a driver, but in real
+        Trackman comparison sessions the same rail value showed up as false
+        spin for 7-irons and wedges. Keep the raw DSP diagnostics, but do
+        not expose those rail picks as measured spin for high-spin clubs.
+        """
+        spin = processed.spin
+        if not spin or spin.spin_rpm <= 0 or not spin.at_lower_rail:
+            return None
+
+        high_spin_clubs = {
+            ClubType.IRON_6,
+            ClubType.IRON_7,
+            ClubType.IRON_8,
+            ClubType.IRON_9,
+            ClubType.PW,
+            ClubType.GW,
+            ClubType.SW,
+            ClubType.LW,
+        }
+        if self._current_club not in high_spin_clubs:
+            return None
+
+        optimal_spin = get_optimal_spin_for_ball_speed(
+            processed.ball_speed_mph,
+            self._current_club,
+        )
+        floor_rpm = optimal_spin * 0.60
+        if spin.spin_rpm >= floor_rpm:
+            return None
+
+        return (
+            f"Lower-rail spin candidate {spin.spin_rpm:.0f} RPM is below "
+            f"the {self._current_club.value} plausibility floor "
+            f"({floor_rpm:.0f} RPM)"
+        )
 
     def wait_for_shot(self, timeout: float = 60) -> Optional[Shot]:
         """

@@ -214,6 +214,14 @@ class Shot:
         launch_angle_confidence: Confidence in launch angle measurement (0-1)
         spin_rpm: Spin rate in RPM (from rolling buffer mode)
         spin_confidence: Confidence in spin measurement (0-1)
+        spin_result_quality: Processor quality label for the spin detection
+        spin_snr: Signal-to-noise ratio of the spin envelope peak
+        spin_modulation_depth: Envelope std/mean inside the spin window
+        spin_peak_freq_hz: Frequency of the detected spin candidate
+        spin_seam_cycles: Number of spin cycles in the analysis window
+        spin_at_lower_rail: Whether the spin candidate hit the low search boundary
+        spin_at_upper_rail: Whether the spin candidate hit the high search boundary
+        spin_rejection_reason: Why spin was withheld, if it was rejected
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
         mode: Shot source — "streaming", "rolling-buffer", or "mock"
         readings_data: Serialized readings for session logging
@@ -231,6 +239,14 @@ class Shot:
     launch_angle_confidence: Optional[float] = None
     spin_rpm: Optional[float] = None
     spin_confidence: Optional[float] = None
+    spin_result_quality: Optional[str] = None
+    spin_snr: Optional[float] = None
+    spin_modulation_depth: Optional[float] = None
+    spin_peak_freq_hz: Optional[float] = None
+    spin_seam_cycles: Optional[float] = None
+    spin_at_lower_rail: Optional[bool] = None
+    spin_at_upper_rail: Optional[bool] = None
+    spin_rejection_reason: Optional[str] = None
     carry_spin_adjusted: Optional[float] = None
     mode: str = "rolling-buffer"
     readings_data: Optional[list] = None
@@ -314,6 +330,8 @@ class Shot:
         Returns:
             "high", "medium", "low", or None if no spin data
         """
+        if self.spin_rpm is not None and self.spin_result_quality:
+            return self.spin_result_quality
         if self.spin_confidence is None:
             return None
         if self.spin_confidence >= SPIN_CONFIDENCE_HIGH:
@@ -321,5 +339,4 @@ class Shot:
         if self.spin_confidence >= 0.4:
             return "medium"
         return "low"
-
 

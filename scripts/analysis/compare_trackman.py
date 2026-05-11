@@ -185,6 +185,11 @@ class Shot:
     launch_angle_vertical: Optional[float] = None
     launch_angle_horizontal: Optional[float] = None
     spin_rpm: Optional[float] = None
+    spin_confidence: Optional[float] = None
+    spin_quality: Optional[str] = None
+    spin_snr: Optional[float] = None
+    spin_candidate_rpm: Optional[float] = None
+    spin_rejection_reason: Optional[str] = None
     carry_yards: Optional[float] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
@@ -260,6 +265,12 @@ def load_openflight(path: Path) -> List[Shot]:
                 launch_angle_horizontal=_to_float(
                     data.get("launch_angle_horizontal")),
                 spin_rpm=_to_float(data.get("spin_rpm")),
+                spin_confidence=_to_float(data.get("spin_confidence")),
+                spin_quality=data.get("spin_quality"),
+                spin_snr=_to_float(data.get("spin_snr")),
+                spin_candidate_rpm=_to_float(
+                    data.get("spin_candidate_rpm")),
+                spin_rejection_reason=data.get("spin_rejection_reason"),
                 carry_yards=_to_float(
                     data.get("carry_spin_adjusted")
                     or data.get("estimated_carry_yards")),
@@ -470,6 +481,8 @@ _OUTPUT_FIELDS = [
     "launch_v_of", "launch_v_tm", "launch_v_delta",
     "launch_h_of", "launch_h_tm", "launch_h_delta",
     "spin_of", "spin_tm", "spin_delta",
+    "spin_candidate_of", "spin_confidence_of", "spin_quality_of",
+    "spin_snr_of", "spin_rejection_of",
     "carry_of", "carry_tm", "carry_delta",
     "match_quality", "notes",
 ]
@@ -517,6 +530,11 @@ def _row(pair: Pair) -> Dict[str, Any]:
         "spin_tm":          f(tm.spin_rpm) if tm else None,
         "spin_delta":       _delta(of.spin_rpm if of else None,
                                    tm.spin_rpm if tm else None),
+        "spin_candidate_of": f(of.spin_candidate_rpm) if of else None,
+        "spin_confidence_of": f(of.spin_confidence) if of else None,
+        "spin_quality_of":  of.spin_quality if of else None,
+        "spin_snr_of":      f(of.spin_snr) if of else None,
+        "spin_rejection_of": of.spin_rejection_reason if of else None,
         "carry_of":         f(of.carry_yards) if of else None,
         "carry_tm":         f(tm.carry_yards) if tm else None,
         "carry_delta":      _delta(of.carry_yards if of else None,

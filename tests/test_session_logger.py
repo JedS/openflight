@@ -1,8 +1,6 @@
 """Tests for session_logger module."""
 
 import json
-import pytest
-from pathlib import Path
 
 from openflight.session_logger import SessionLogger
 
@@ -153,6 +151,38 @@ class TestLogTriggerDiagnostic:
 
         assert entry["all_outbound_speeds"] == []
         assert entry["all_inbound_speeds"] == []
+
+
+class TestLogShot:
+    """Tests for shot logging."""
+
+    def test_shot_logs_spin_diagnostics(self, tmp_path):
+        """Shot entries should preserve rejected-spin diagnostics."""
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        logger.log_shot(
+            ball_speed_mph=120.0,
+            club_speed_mph=85.0,
+            smash_factor=1.41,
+            estimated_carry_yards=165.0,
+            club="7-iron",
+            peak_magnitude=None,
+            readings_count=0,
+            spin_snr=2.96,
+            spin_peak_freq_hz=95.21484375,
+            spin_seam_cycles=4.8,
+            spin_rejection_reason="SNR too low (2.96, need 3.0)",
+        )
+
+        lines = logger.session_path.read_text().strip().split("\n")
+        entry = json.loads(lines[-1])
+
+        assert entry["type"] == "shot_detected"
+        assert entry["spin_rpm"] is None
+        assert entry["spin_snr"] == 2.96
+        assert entry["spin_candidate_rpm"] == 5713
+        assert entry["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
 
 
 class TestLogKld7Buffer:
