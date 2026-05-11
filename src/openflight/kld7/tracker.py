@@ -40,6 +40,7 @@ class KLD7Tracker:
     # fail with AttributeError when code accesses these.
     angle_offset_deg = 0.0
     base_freq = 0
+    shot_window_after_s = 0.75
 
     def __init__(
         self,
@@ -255,7 +256,51 @@ class KLD7Tracker:
         """Add a frame to the ring buffer."""
         self._ring_buffer.append(frame)
 
-    def _extract_ball_radc(self, ball_speed_mph: float) -> Optional[KLD7Angle]:
+    def _radc_frames_for_extraction(
+        self,
+        shot_timestamp: Optional[float] = None,
+    ) -> tuple[list[dict], int, int]:
+        """Return RADC frames near the shot timestamp.
+
+        The ring buffer is frame-count limited, so an underfilled/sparse
+        stream can span far longer than `buffer_seconds`. Filter by wall
+        time when a shot timestamp is available so stale frames from prior
+        movement cannot influence this shot's angle.
+        """
+        frames = [
+            {"timestamp": f.timestamp, "radc": f.radc}
+            for f in self._ring_buffer
+            if f.radc is not None
+        ]
+        frames_available = len(frames)
+
+        if shot_timestamp is None:
+            return frames, frames_available, 0
+
+        window_before_s = max(float(getattr(self, "buffer_seconds", 0.0) or 0.0), 0.0)
+        window_after_s = max(float(getattr(self, "shot_window_after_s", 0.0) or 0.0), 0.0)
+        start = shot_timestamp - window_before_s
+        end = shot_timestamp + window_after_s
+
+        filtered = [
+            frame for frame in frames
+            if start <= float(frame["timestamp"]) <= end
+        ]
+        ignored = frames_available - len(filtered)
+        if ignored:
+            logger.info(
+                "[KLD7] RADC: shot timestamp window kept %d/%d frames "
+                "(ignored %d outside %.2fs before / %.2fs after, %s)",
+                len(filtered), frames_available, ignored,
+                window_before_s, window_after_s, self.orientation,
+            )
+        return filtered, frames_available, ignored
+
+    def _extract_ball_radc(
+        self,
+        ball_speed_mph: float,
+        shot_timestamp: Optional[float] = None,
+    ) -> Optional[KLD7Angle]:
         """Extract ball launch angle via RADC phase interferometry.
 
         Uses the OPS243-measured ball speed to narrow the FFT velocity
@@ -263,15 +308,16 @@ class KLD7Tracker:
         """
         from .radc import extract_launch_angle
 
-        frames = [
-            {"timestamp": f.timestamp, "radc": f.radc}
-            for f in self._ring_buffer
-            if f.radc is not None
-        ]
+        frames, frames_available, frames_ignored_stale = (
+            self._radc_frames_for_extraction(shot_timestamp)
+        )
 
         if not frames:
-            logger.info("[KLD7] RADC: no frames with RADC data in buffer (%d total frames)",
-                         len(self._ring_buffer))
+            logger.info(
+                "[KLD7] RADC: no frames with RADC data in extraction window "
+                "(%d available, %d total frames, %s)",
+                frames_available, len(self._ring_buffer), self.orientation,
+            )
             return None
 
         logger.info("[KLD7] RADC: examining %d frames, ball_speed=%.1f mph",
@@ -328,6 +374,9 @@ class KLD7Tracker:
                 horizontal_deg=None,
                 confidence=best["confidence"],
                 num_frames=best["frame_count"],
+                frames_examined=len(frames),
+                frames_available=frames_available,
+                frames_ignored_stale=frames_ignored_stale,
                 magnitude=best["avg_snr_db"],
                 detection_class="ball",
             )
@@ -336,6 +385,9 @@ class KLD7Tracker:
             horizontal_deg=best["launch_angle_deg"],
             confidence=best["confidence"],
             num_frames=best["frame_count"],
+            frames_examined=len(frames),
+            frames_available=frames_available,
+            frames_ignored_stale=frames_ignored_stale,
             magnitude=best["avg_snr_db"],
             detection_class="ball",
         )
@@ -354,7 +406,7 @@ class KLD7Tracker:
             return None
 
         try:
-            result = self._extract_ball_radc(ball_speed_mph)
+            result = self._extract_ball_radc(ball_speed_mph, shot_timestamp=shot_timestamp)
             if result is not None:
                 return result
             logger.info("[KLD7] RADC extraction returned None (no detections at %.1f mph)", ball_speed_mph)
@@ -363,7 +415,11 @@ class KLD7Tracker:
 
         return None
 
-    def get_club_angle(self, club_speed_mph: Optional[float] = None) -> Optional[KLD7Angle]:
+    def get_club_angle(
+        self,
+        club_speed_mph: Optional[float] = None,
+        shot_timestamp: Optional[float] = None,
+    ) -> Optional[KLD7Angle]:
         """Extract club head angle from RADC using OPS243 club speed.
 
         Same approach as ball extraction — uses club speed to find the
@@ -373,7 +429,7 @@ class KLD7Tracker:
             return None
 
         try:
-            result = self._extract_ball_radc(club_speed_mph)
+            result = self._extract_ball_radc(club_speed_mph, shot_timestamp=shot_timestamp)
             if result is not None:
                 # Re-tag as club detection
                 result.detection_class = "club"

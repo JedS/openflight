@@ -29,3 +29,6 @@ class KLD7Angle:
     num_frames: int = 0
     # "ball", "club", or None (unclassified / horizontal orientation)
     detection_class: Optional[str] = None
+    frames_examined: int = 0
+    frames_available: int = 0
+    frames_ignored_stale: int = 0

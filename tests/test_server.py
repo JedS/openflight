@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-
 from openflight import server as server_module
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
@@ -429,6 +428,10 @@ class TestOnShotDetected:
                 calls.append(("ball", shot_timestamp))
                 return KLD7Angle(vertical_deg=12.0, confidence=0.8, num_frames=2)
 
+            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
+                calls.append(("club", shot_timestamp))
+                return None
+
             def reset(self):
                 calls.append(("reset", None))
 
@@ -443,6 +446,7 @@ class TestOnShotDetected:
 
         shot = Shot(
             ball_speed_mph=150.0,
+            club_speed_mph=100.0,
             timestamp=datetime.now(),
             impact_timestamp=1234.5,
             club=ClubType.DRIVER,
@@ -451,6 +455,7 @@ class TestOnShotDetected:
         on_shot_detected(shot)
 
         assert ("ball", 1234.5) in calls
+        assert ("club", 1234.5) in calls
         assert emitted
 
     def test_implausible_kld7_angle_falls_back_to_estimate(self, monkeypatch):
@@ -498,7 +503,7 @@ class TestOnShotDetected:
             def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
                 return KLD7Angle(horizontal_deg=1.5, confidence=0.68, num_frames=3)
 
-            def get_club_angle(self, club_speed_mph=None):
+            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
                 return None
 
             def reset(self):
@@ -536,7 +541,7 @@ class TestOnShotDetected:
             def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
                 return KLD7Angle(vertical_deg=18.7, confidence=0.8, num_frames=2)
 
-            def get_club_angle(self, club_speed_mph=None):
+            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
                 return None
 
             def reset(self):
@@ -595,7 +600,7 @@ class TestOnShotDetected:
             def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
                 return KLD7Angle(vertical_deg=15.0, confidence=0.7, num_frames=2)
 
-            def get_club_angle(self, club_speed_mph=None):
+            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
                 # Radar reports -31° vertical → server negates to +31° AoA
                 return KLD7Angle(vertical_deg=-31.0, confidence=0.7, num_frames=2)
 

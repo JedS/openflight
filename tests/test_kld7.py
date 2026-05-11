@@ -7,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from openflight.kld7.tracker import KLD7Tracker
 from openflight.kld7.types import KLD7Angle, KLD7Frame
 from openflight.launch_monitor import Shot
@@ -299,6 +298,77 @@ class TestRADCAngleExtraction:
 
         result = tracker.get_angle_for_shot(ball_speed_mph=None)
         assert result is None
+
+    def test_get_angle_for_shot_filters_stale_radc_frames(self, monkeypatch):
+        """Shot timestamp filtering prevents stale ring-buffer frames from influencing a shot."""
+        tracker = self._make_tracker()
+        tracker.buffer_seconds = 2.0
+        shot_ts = 1000.0
+
+        tracker._add_frame(KLD7Frame(timestamp=shot_ts - 10.0, radc=b"stale-old"))
+        tracker._add_frame(KLD7Frame(timestamp=shot_ts - 1.2, radc=b"fresh-a"))
+        tracker._add_frame(KLD7Frame(timestamp=shot_ts + 0.4, radc=b"fresh-b"))
+        tracker._add_frame(KLD7Frame(timestamp=shot_ts + 1.0, radc=b"stale-future"))
+
+        seen_timestamps = []
+
+        def fake_extract_launch_angle(frames, **kwargs):
+            seen_timestamps.extend(frame["timestamp"] for frame in frames)
+            return [{
+                "launch_angle_deg": 7.5,
+                "ball_speed_mph": 80.0,
+                "avg_snr_db": 8.0,
+                "confidence": 0.8,
+                "frame_count": 2,
+            }]
+
+        monkeypatch.setattr(
+            "openflight.kld7.radc.extract_launch_angle",
+            fake_extract_launch_angle,
+        )
+
+        result = tracker.get_angle_for_shot(
+            shot_timestamp=shot_ts,
+            ball_speed_mph=80.0,
+        )
+
+        assert seen_timestamps == [shot_ts - 1.2, shot_ts + 0.4]
+        assert result is not None
+        assert result.vertical_deg == pytest.approx(7.5)
+        assert result.frames_examined == 2
+        assert result.frames_available == 4
+        assert result.frames_ignored_stale == 2
+
+    def test_get_angle_for_shot_uses_all_radc_frames_without_timestamp(self, monkeypatch):
+        """Legacy callers without a shot timestamp retain all-frame extraction behavior."""
+        tracker = self._make_tracker()
+        tracker._add_frame(KLD7Frame(timestamp=1000.0, radc=b"a"))
+        tracker._add_frame(KLD7Frame(timestamp=1010.0, radc=b"b"))
+
+        frame_counts = []
+
+        def fake_extract_launch_angle(frames, **kwargs):
+            frame_counts.append(len(frames))
+            return [{
+                "launch_angle_deg": 7.5,
+                "ball_speed_mph": 80.0,
+                "avg_snr_db": 8.0,
+                "confidence": 0.8,
+                "frame_count": 2,
+            }]
+
+        monkeypatch.setattr(
+            "openflight.kld7.radc.extract_launch_angle",
+            fake_extract_launch_angle,
+        )
+
+        result = tracker.get_angle_for_shot(ball_speed_mph=80.0)
+
+        assert frame_counts == [2]
+        assert result is not None
+        assert result.frames_examined == 2
+        assert result.frames_available == 2
+        assert result.frames_ignored_stale == 0
 
     def test_angle_offset_applied_to_radc(self):
         """Angle offset should be applied to RADC-extracted angle."""

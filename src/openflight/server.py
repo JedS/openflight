@@ -1025,7 +1025,10 @@ def on_shot_detected(shot: Shot):
                 # include club_angle alongside ball_angle for offline analysis.
                 club_angle_v = None
                 if shot.club_speed_mph:
-                    club_angle_v = kld7_vertical.get_club_angle(club_speed_mph=shot.club_speed_mph)
+                    club_angle_v = kld7_vertical.get_club_angle(
+                        club_speed_mph=shot.club_speed_mph,
+                        shot_timestamp=shot_ts,
+                    )
                     if club_angle_v and club_angle_v.vertical_deg is not None:
                         # Negate: the radar sees where the club IS (above center = positive),
                         # but AoA is the club's attack direction (descending = negative).
@@ -1052,6 +1055,9 @@ def on_shot_detected(shot: Shot):
                             "detection_class": kld7_angle.detection_class,
                             "magnitude": kld7_angle.magnitude,
                             "num_frames": kld7_angle.num_frames,
+                            "frames_examined": kld7_angle.frames_examined,
+                            "frames_available": kld7_angle.frames_available,
+                            "frames_ignored_stale": kld7_angle.frames_ignored_stale,
                         } if kld7_angle else None,
                         club_angle={
                             "vertical_deg": club_angle_v.vertical_deg,
@@ -1059,6 +1065,9 @@ def on_shot_detected(shot: Shot):
                             "detection_class": club_angle_v.detection_class,
                             "magnitude": club_angle_v.magnitude,
                             "num_frames": club_angle_v.num_frames,
+                            "frames_examined": club_angle_v.frames_examined,
+                            "frames_available": club_angle_v.frames_available,
+                            "frames_ignored_stale": club_angle_v.frames_ignored_stale,
                         } if club_angle_v else None,
                     )
 
@@ -1094,7 +1103,10 @@ def on_shot_detected(shot: Shot):
                 # include club_angle alongside ball_angle for offline analysis.
                 club_angle_h = None
                 if shot.club_speed_mph:
-                    club_angle_h = kld7_horizontal.get_club_angle(club_speed_mph=shot.club_speed_mph)
+                    club_angle_h = kld7_horizontal.get_club_angle(
+                        club_speed_mph=shot.club_speed_mph,
+                        shot_timestamp=shot_ts,
+                    )
                     if club_angle_h and club_angle_h.horizontal_deg is not None:
                         shot.club_path_deg = club_angle_h.horizontal_deg
                         logger.info("[SERVER] Club path: %.1f° (conf=%.0f%%)",
@@ -1112,6 +1124,9 @@ def on_shot_detected(shot: Shot):
                             "detection_class": kld7_angle_h.detection_class,
                             "magnitude": kld7_angle_h.magnitude,
                             "num_frames": kld7_angle_h.num_frames,
+                            "frames_examined": kld7_angle_h.frames_examined,
+                            "frames_available": kld7_angle_h.frames_available,
+                            "frames_ignored_stale": kld7_angle_h.frames_ignored_stale,
                         } if kld7_angle_h else None,
                         club_angle={
                             "horizontal_deg": club_angle_h.horizontal_deg,
@@ -1119,6 +1134,9 @@ def on_shot_detected(shot: Shot):
                             "detection_class": club_angle_h.detection_class,
                             "magnitude": club_angle_h.magnitude,
                             "num_frames": club_angle_h.num_frames,
+                            "frames_examined": club_angle_h.frames_examined,
+                            "frames_available": club_angle_h.frames_available,
+                            "frames_ignored_stale": club_angle_h.frames_ignored_stale,
                         } if club_angle_h else None,
                     )
 
