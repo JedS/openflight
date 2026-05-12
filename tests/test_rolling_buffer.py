@@ -1585,6 +1585,49 @@ class TestSpinDetectionIntegration:
         assert result is not None
         assert result.spin is not None
 
+    def test_marginal_snr_preserves_fft_pick(self):
+        """Marginal-SNR captures must keep the FFT peak, not flip to upper rail.
+
+        Regression test: a previous autocorrelation override (corr >= 0.4)
+        would replace the FFT peak with the autocorr-derived frequency
+        when they disagreed. Because the autocorr search region's peak
+        commonly lands at minimum lag (~12000 RPM, the upper rail), real
+        mid-range seam tones at marginal SNR were being flipped to ~12000
+        RPM and then rejected as "upper-rail noise". This test pins the
+        post-fix behavior: the FFT pick survives autocorr disagreement.
+        """
+        rng = np.random.default_rng(seed=42)
+        # Build a clean seam-modulated capture at 5400 RPM (90 Hz),
+        # then add white noise so envelope SNR drops into the marginal
+        # band where the autocorrelation fallback used to run.
+        i_clean, q_clean = self._make_iq_with_seam_modulation(
+            base_speed_mph=120, spin_rpm=5400, modulation_depth=0.02,
+        )
+        noise_amp = 35
+        i_samples = [
+            int(np.clip(v + rng.normal(0, noise_amp), 0, 4095)) for v in i_clean
+        ]
+        q_samples = [
+            int(np.clip(v + rng.normal(0, noise_amp), 0, 4095)) for v in q_clean
+        ]
+        capture = IQCapture(
+            sample_time=0.0, trigger_time=0.068,
+            i_samples=i_samples, q_samples=q_samples,
+        )
+        processor = RollingBufferProcessor()
+        result = processor.detect_spin(
+            capture, ball_speed_mph=120, ball_timestamp_ms=5.0,
+        )
+        if result.spin_rpm > 0:
+            assert abs(result.spin_rpm - 5400) < 600, (
+                f"FFT pick should win; got {result.spin_rpm} RPM "
+                f"(SNR={result.snr})"
+            )
+            assert result.spin_rpm < 10000, (
+                "Result must not be flipped to the upper rail "
+                f"(got {result.spin_rpm} RPM)"
+            )
+
 
 # =============================================================================
 # Tests for Spin Validation Gates

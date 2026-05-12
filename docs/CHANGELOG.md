@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Spin detection: drop the autocorrelation override branch. The autocorr
+  peak inside the envelope search region often lands at minimum lag
+  (~12000 RPM / upper rail) by spectral coincidence, which previously
+  flipped legitimate mid-range FFT seam picks to the upper rail and got
+  them rejected as bandpass-shoulder noise. The autocorr fallback still
+  *confirms* the FFT pick when the two agree within 10%; disagreements
+  are now logged for diagnostics but never replace the FFT result.
+- Spin detection: lower `SPIN_SNR_MIN` from 3.0 → 2.5 so marginal but
+  real seam tones are reported at low confidence instead of dropped.
+
 ### Added
+- `scripts/analysis/plot_spin_debug.py`: 4-panel diagnostic for a single
+  `rolling_buffer_capture` (speed timeline, raw I/Q, bandpass envelope,
+  envelope FFT spectrum) to inspect what the spin algorithm saw and why
+  it accepted or rejected a shot.
 - K-LD7 shot-correlation analysis workflow and theory writeup
   - `scripts/analyze_kld7.py --pair-shots` for offline club-to-ball pairing on `.pkl` captures
   - `docs/kld7-ball-detection-theory.md` with capture findings and detection rationale

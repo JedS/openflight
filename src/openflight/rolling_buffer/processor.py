@@ -81,7 +81,7 @@ class RollingBufferProcessor:
     SPIN_MIN_SAMPLES = 600           # ~20ms minimum ball signal
     SPIN_SNR_HIGH = 8.0              # High confidence threshold
     SPIN_SNR_MEDIUM = 5.0            # Medium confidence threshold
-    SPIN_SNR_MIN = 3.0               # Minimum to report
+    SPIN_SNR_MIN = 2.5               # Minimum to report
     SPIN_AUTOCORR_MIN = 0.3          # Minimum normalized correlation
     SPIN_MIN_CYCLES = 2              # Minimum seam cycles to report
     # Rail-rejection guards. The envelope FFT has two pathological
@@ -564,8 +564,7 @@ class RollingBufferProcessor:
         peak_freq = float(valid_freqs[peak_idx])
         peak_mag = float(valid_mag[peak_idx])
 
-        # Rail flags — set BEFORE potential autocorrelation override so
-        # we record where the envelope FFT *itself* hunted.
+        # Rail flags record where the envelope FFT peak landed.
         at_lower_rail = peak_idx < leakage + self.SPIN_UPPER_RAIL_BINS
         at_upper_rail = peak_idx >= n_valid - self.SPIN_UPPER_RAIL_BINS
 
@@ -577,8 +576,7 @@ class RollingBufferProcessor:
         spin_rpm = peak_freq * 60
 
         # Hard ceiling — reject anything above physical maximum.
-        # The FFT mask should enforce this, but the autocorrelation override
-        # path can bypass it. Belt-and-suspenders.
+        # The FFT mask should enforce this; belt-and-suspenders.
         max_rpm = self.SPIN_MAX_SEAM_HZ * 60
         if spin_rpm > max_rpm:
             return SpinResult.no_spin_detected(
@@ -687,62 +685,19 @@ class RollingBufferProcessor:
                                 "[PROCESSOR] Spin autocorrelation confirms: %.0f RPM (corr=%.2f)",
                                 acorr_rpm, acorr_peak_val,
                             )
-                        elif acorr_peak_val >= 0.4:
-                            spin_rpm = acorr_rpm
-                            peak_freq = acorr_freq
-                            autocorr_confirmed = True
-                            # Re-evaluate rail status after the
-                            # override — the autocorr peak may live in
-                            # a different region of the seam range than
-                            # the FFT peak did.
-                            new_idx = int(
-                                np.argmin(np.abs(valid_freqs - acorr_freq))
-                            )
-                            at_lower_rail = (
-                                new_idx < leakage + self.SPIN_UPPER_RAIL_BINS
-                            )
-                            at_upper_rail = (
-                                new_idx >= n_valid - self.SPIN_UPPER_RAIL_BINS
-                            )
+                        else:
+                            # Autocorr peak disagrees with FFT peak. The
+                            # autocorr peak at minimum lag is almost
+                            # always the upper-rail rate (~12000 RPM),
+                            # which previously overrode legitimate
+                            # mid-range seam tones. Log the disagreement
+                            # but keep the FFT pick.
                             logger.info(
-                                "[PROCESSOR] Spin autocorrelation override: %.0f RPM (corr=%.2f)",
-                                acorr_rpm, acorr_peak_val,
+                                "[PROCESSOR] Spin autocorrelation disagrees: "
+                                "FFT=%.0f RPM, autocorr=%.0f RPM (corr=%.2f); "
+                                "keeping FFT pick",
+                                spin_rpm, acorr_rpm, acorr_peak_val,
                             )
-
-        # Rails can be re-asserted by the autocorrelation override.
-        # Re-check the same rejection rules so the override path can't
-        # bypass them.
-        if at_upper_rail and fft_snr < self.SPIN_SNR_HIGH:
-            logger.warning(
-                "[PROCESSOR] Spin rejected after autocorr: upper-rail "
-                "peak at %.0f RPM (SNR %.1f)",
-                spin_rpm, fft_snr,
-            )
-            return SpinResult.no_spin_detected(
-                f"Upper-rail peak at {spin_rpm:.0f} RPM (post-autocorr)",
-                snr=fft_snr,
-                modulation_depth=modulation_depth,
-                peak_freq_hz=peak_freq,
-                seam_cycles=seam_cycles,
-                at_upper_rail=True,
-            )
-        if at_lower_rail and (
-            modulation_depth is None or modulation_depth < 0.012
-        ):
-            logger.warning(
-                "[PROCESSOR] Spin rejected after autocorr: lower-rail "
-                "peak at %.0f RPM (mod %.4f)",
-                spin_rpm,
-                modulation_depth if modulation_depth is not None else float("nan"),
-            )
-            return SpinResult.no_spin_detected(
-                f"Lower-rail peak at {spin_rpm:.0f} RPM (post-autocorr)",
-                snr=fft_snr,
-                modulation_depth=modulation_depth,
-                peak_freq_hz=peak_freq,
-                seam_cycles=seam_cycles,
-                at_lower_rail=True,
-            )
 
         # --- Quality assessment ---
         if seam_cycles < self.SPIN_MIN_CYCLES:
