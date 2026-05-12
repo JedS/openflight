@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+
 from openflight.launch_monitor import ClubType, Shot
 from openflight.rolling_buffer import (
     IQCapture,
@@ -885,6 +886,77 @@ class TestTriggerStrategyDiagnostics:
         assert diagnostics[0]["peak_outbound_magnitude"] == 0.0
         assert diagnostics[0]["peak_inbound_magnitude"] == 0.0
 
+    def test_capture_activity_summary_counts_valid_outbound(self):
+        """Capture summary should split directions and apply the sound-trigger floor."""
+        trigger = PollingTrigger()
+
+        class StubProcessor:
+            def process_standard(self, capture):
+                return SpeedTimeline(
+                    readings=[
+                        SpeedReading(
+                            speed_mph=12.0,
+                            magnitude=80.0,
+                            timestamp_ms=0.0,
+                            direction="outbound",
+                        ),
+                        SpeedReading(
+                            speed_mph=68.0,
+                            magnitude=250.0,
+                            timestamp_ms=4.0,
+                            direction="outbound",
+                        ),
+                        SpeedReading(
+                            speed_mph=20.0,
+                            magnitude=120.0,
+                            timestamp_ms=8.0,
+                            direction="inbound",
+                        ),
+                    ],
+                    sample_rate_hz=56.0,
+                )
+
+        summary = trigger._summarize_capture_activity(StubProcessor(), object())
+
+        assert summary["total_readings"] == 3
+        assert summary["outbound_readings"] == 2
+        assert summary["inbound_readings"] == 1
+        assert summary["peak_outbound_mph"] == 68.0
+        assert summary["peak_inbound_mph"] == 20.0
+        assert summary["peak_outbound_magnitude"] == 250.0
+        assert summary["valid_outbound_count"] == 1
+        assert summary["valid_peak_outbound_mph"] == 68.0
+
+    def test_activity_diagnostic_uses_summary_fields(self):
+        """Activity diagnostics should preserve summary fields and latency."""
+        trigger = PollingTrigger()
+        summary = {
+            "total_readings": 3,
+            "outbound_readings": 2,
+            "inbound_readings": 1,
+            "peak_outbound_mph": 68.0,
+            "peak_inbound_mph": 20.0,
+            "all_outbound_speeds": [12.0, 68.0],
+            "all_inbound_speeds": [20.0],
+            "peak_outbound_magnitude": 250.0,
+            "peak_inbound_magnitude": 120.0,
+        }
+
+        trigger._append_activity_diagnostic(
+            summary,
+            accepted=True,
+            reason="accepted",
+            response_bytes=32768,
+            trigger_latency_ms=3.5,
+        )
+        diagnostics = trigger.drain_diagnostics()
+
+        assert diagnostics[0]["accepted"] is True
+        assert diagnostics[0]["response_bytes"] == 32768
+        assert diagnostics[0]["all_outbound_speeds"] == [12.0, 68.0]
+        assert diagnostics[0]["peak_outbound_magnitude"] == 250.0
+        assert diagnostics[0]["trigger_latency_ms"] == 3.5
+
 
 # =============================================================================
 # Tests for FFT Dual-Peak Extraction and DC Mask
@@ -1337,133 +1409,8 @@ class TestMultiPeakIntegration:
         )
 
 
-# =============================================================================
-# Tests for extract_ball_speeds (spin detection fix)
-# =============================================================================
-
-class TestExtractBallSpeeds:
-    """Tests for the updated extract_ball_speeds using ball position instead of trigger offset."""
-
-    def _make_timeline(self, readings):
-        """Helper to create a SpeedTimeline from a list of reading tuples."""
-        speed_readings = [
-            SpeedReading(
-                speed_mph=speed,
-                magnitude=mag,
-                timestamp_ms=ts,
-                direction=direction,
-            )
-            for speed, mag, ts, direction in readings
-        ]
-        return SpeedTimeline(readings=speed_readings, sample_rate_hz=937.5)
-
-    def test_finds_ball_readings_at_ball_timestamp(self):
-        """Ball readings at ball_timestamp_ms are included."""
-        timeline = self._make_timeline([
-            # Ball signal at t=10-60ms
-            (75.0, 10.0, 10.0, "outbound"),
-            (74.5, 9.0, 20.0, "outbound"),
-            (75.2, 8.0, 30.0, "outbound"),
-            (74.8, 7.0, 40.0, "outbound"),
-            (75.1, 6.0, 50.0, "outbound"),
-            # Club signal earlier
-            (55.0, 15.0, 0.0, "outbound"),
-            # Inbound noise
-            (30.0, 5.0, 25.0, "inbound"),
-        ])
-        processor = RollingBufferProcessor()
-        speeds = processor.extract_ball_speeds(
-            timeline, ball_timestamp_ms=10.0, ball_speed_mph=75.0
-        )
-        assert len(speeds) == 5
-        assert all(70 <= s <= 80 for s in speeds)
-
-    def test_filters_by_speed_band(self):
-        """Only readings within speed tolerance of ball_speed_mph are included."""
-        timeline = self._make_timeline([
-            (75.0, 10.0, 10.0, "outbound"),  # In band
-            (74.0, 9.0, 20.0, "outbound"),   # In band
-            (55.0, 15.0, 15.0, "outbound"),  # Out of band (club speed)
-            (90.0, 5.0, 25.0, "outbound"),   # Out of band (too fast)
-        ])
-        processor = RollingBufferProcessor()
-        speeds = processor.extract_ball_speeds(
-            timeline, ball_timestamp_ms=10.0, ball_speed_mph=75.0,
-            speed_tolerance_mph=5.0,
-        )
-        assert len(speeds) == 2
-        assert 55.0 not in speeds
-        assert 90.0 not in speeds
-
-    def test_respects_window(self):
-        """Only readings within window_ms after ball_timestamp_ms are included."""
-        timeline = self._make_timeline([
-            (75.0, 10.0, 10.0, "outbound"),
-            (74.5, 9.0, 30.0, "outbound"),
-            (75.2, 8.0, 50.0, "outbound"),
-            (74.8, 7.0, 80.0, "outbound"),  # Outside 50ms window
-            (75.1, 6.0, 100.0, "outbound"),  # Outside 50ms window
-        ])
-        processor = RollingBufferProcessor()
-        speeds = processor.extract_ball_speeds(
-            timeline, ball_timestamp_ms=10.0, ball_speed_mph=75.0,
-            window_ms=50,
-        )
-        assert len(speeds) == 3
-
-    def test_excludes_inbound_readings(self):
-        """Inbound readings are always excluded."""
-        timeline = self._make_timeline([
-            (75.0, 10.0, 10.0, "outbound"),
-            (74.0, 9.0, 20.0, "inbound"),   # Same speed band but inbound
-        ])
-        processor = RollingBufferProcessor()
-        speeds = processor.extract_ball_speeds(
-            timeline, ball_timestamp_ms=10.0, ball_speed_mph=75.0,
-        )
-        assert len(speeds) == 1
-
-    def test_excludes_readings_before_ball_timestamp(self):
-        """Readings before ball_timestamp_ms are excluded."""
-        timeline = self._make_timeline([
-            (75.0, 10.0, 0.0, "outbound"),   # Before ball_timestamp
-            (74.5, 9.0, 5.0, "outbound"),    # Before ball_timestamp
-            (75.2, 8.0, 10.0, "outbound"),   # At ball_timestamp (included)
-            (74.8, 7.0, 20.0, "outbound"),   # After (included)
-        ])
-        processor = RollingBufferProcessor()
-        speeds = processor.extract_ball_speeds(
-            timeline, ball_timestamp_ms=10.0, ball_speed_mph=75.0,
-        )
-        assert len(speeds) == 2
-
-    def test_empty_timeline_returns_empty(self):
-        """Empty timeline returns empty list."""
-        timeline = self._make_timeline([])
-        processor = RollingBufferProcessor()
-        speeds = processor.extract_ball_speeds(
-            timeline, ball_timestamp_ms=10.0, ball_speed_mph=75.0,
-        )
-        assert speeds == []
-
-    def test_custom_speed_tolerance(self):
-        """Custom speed_tolerance_mph is respected."""
-        timeline = self._make_timeline([
-            (75.0, 10.0, 10.0, "outbound"),
-            (72.0, 9.0, 20.0, "outbound"),  # Within ±5 but not ±2
-            (74.0, 8.0, 30.0, "outbound"),  # Within ±2
-        ])
-        processor = RollingBufferProcessor()
-        speeds = processor.extract_ball_speeds(
-            timeline, ball_timestamp_ms=10.0, ball_speed_mph=75.0,
-            speed_tolerance_mph=2.0,
-        )
-        assert len(speeds) == 2  # 75.0 and 74.0 only
-        assert 72.0 not in speeds
-
-
 class TestSpinDetectionIntegration:
-    """End-to-end spin detection tests using synthetic I/Q with speed oscillations."""
+    """End-to-end spin detection tests using synthetic I/Q seam modulation."""
 
     def _make_iq_with_seam_modulation(
         self,

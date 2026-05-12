@@ -29,6 +29,8 @@ class TriggerStrategy(ABC):
     Different strategies trade off between simplicity, reliability, and efficiency.
     """
 
+    MIN_VALID_OUTBOUND_MPH = 15.0
+
     def __init__(self, pre_trigger_segments: int = 12):
         self._diagnostics: List[dict] = []
         self.pre_trigger_segments = pre_trigger_segments
@@ -79,11 +81,65 @@ class TriggerStrategy(ABC):
             entry["trigger_latency_ms"] = trigger_latency_ms
         self._diagnostics.append(entry)
 
-    def _log_capture(self, capture: IQCapture, accepted: bool):
-        """No-op: capture logging moved to monitor (with processed speed data).
+    def _summarize_capture_activity(
+        self,
+        processor: RollingBufferProcessor,
+        capture: IQCapture,
+    ) -> dict:
+        """Summarize movement in a capture before accepting a sound trigger."""
+        timeline = processor.process_standard(capture)
+        all_readings = timeline.readings
+        all_outbound = [r for r in all_readings if r.is_outbound]
+        all_inbound = [r for r in all_readings if not r.is_outbound]
+        outbound_speeds = [r.speed_mph for r in all_outbound]
+        inbound_speeds = [r.speed_mph for r in all_inbound]
+        valid_outbound = [
+            r for r in all_outbound
+            if r.speed_mph >= self.MIN_VALID_OUTBOUND_MPH
+        ]
 
-        Kept as no-op to avoid breaking subclass call sites.
-        """
+        return {
+            "total_readings": len(all_readings),
+            "outbound_readings": len(all_outbound),
+            "inbound_readings": len(all_inbound),
+            "peak_outbound_mph": max(outbound_speeds, default=0),
+            "peak_inbound_mph": max(inbound_speeds, default=0),
+            "all_outbound_speeds": outbound_speeds,
+            "all_inbound_speeds": inbound_speeds,
+            "peak_outbound_magnitude": max((r.magnitude for r in all_outbound), default=0),
+            "peak_inbound_magnitude": max((r.magnitude for r in all_inbound), default=0),
+            "valid_outbound_count": len(valid_outbound),
+            "valid_peak_outbound_mph": max(
+                (r.speed_mph for r in valid_outbound),
+                default=0,
+            ),
+        }
+
+    def _append_activity_diagnostic(
+        self,
+        summary: dict,
+        *,
+        accepted: bool,
+        reason: str,
+        response_bytes: int,
+        trigger_latency_ms: Optional[float] = None,
+    ):
+        """Append a diagnostic entry using capture-activity summary fields."""
+        self._append_diagnostic(
+            accepted=accepted,
+            reason=reason,
+            response_bytes=response_bytes,
+            total_readings=summary["total_readings"],
+            outbound_readings=summary["outbound_readings"],
+            inbound_readings=summary["inbound_readings"],
+            peak_outbound_mph=summary["peak_outbound_mph"],
+            peak_inbound_mph=summary["peak_inbound_mph"],
+            all_outbound_speeds=summary["all_outbound_speeds"],
+            all_inbound_speeds=summary["all_inbound_speeds"],
+            peak_outbound_magnitude=summary["peak_outbound_magnitude"],
+            peak_inbound_magnitude=summary["peak_inbound_magnitude"],
+            trigger_latency_ms=trigger_latency_ms,
+        )
 
     @abstractmethod
     def wait_for_trigger(
@@ -627,66 +683,36 @@ class GPIOSoundTrigger(TriggerStrategy):
                     )
                     continue
 
-                # Log raw I/Q for ALL triggers (accepted or rejected) for offline analysis
-                self._log_capture(capture, accepted=False)  # updated to True below if accepted
-
                 # Quick validation: does the capture contain any real swing data?
-                timeline = processor.process_standard(capture)
-                all_readings = timeline.readings
-                all_outbound = [r for r in all_readings if r.is_outbound]
-                all_inbound = [r for r in all_readings if not r.is_outbound]
-                outbound_speeds = [r.speed_mph for r in all_outbound]
-                inbound_speeds = [r.speed_mph for r in all_inbound]
-                peak_outbound = max(outbound_speeds, default=0)
-                peak_inbound = max(inbound_speeds, default=0)
-                peak_out_mag = max((r.magnitude for r in all_outbound), default=0)
-                peak_in_mag = max((r.magnitude for r in all_inbound), default=0)
+                summary = self._summarize_capture_activity(processor, capture)
 
-                outbound_valid = [
-                    r for r in all_outbound if r.speed_mph >= 15.0
-                ]
-
-                if not outbound_valid:
+                if not summary["valid_outbound_count"]:
                     logger.info(
-                        "[TRIGGER] GPIO trigger rejected — no outbound speed >= 15 mph "
+                        "[TRIGGER] GPIO trigger rejected — no outbound speed >= %.0f mph "
                         "(peak=%.1f mph, %d readings)",
-                        peak_outbound, len(all_readings)
+                        self.MIN_VALID_OUTBOUND_MPH,
+                        summary["peak_outbound_mph"],
+                        summary["total_readings"],
                     )
-                    self._append_diagnostic(
+                    self._append_activity_diagnostic(
+                        summary,
                         accepted=False,
                         reason="no_outbound_speed",
                         response_bytes=response_len,
-                        total_readings=len(all_readings),
-                        outbound_readings=len(all_outbound),
-                        inbound_readings=len(all_inbound),
-                        peak_outbound_mph=peak_outbound,
-                        peak_inbound_mph=peak_inbound,
-                        all_outbound_speeds=outbound_speeds,
-                        all_inbound_speeds=inbound_speeds,
-                        peak_outbound_magnitude=peak_out_mag,
-                        peak_inbound_magnitude=peak_in_mag,
                         trigger_latency_ms=trigger_latency,
                     )
                     continue
 
-                peak = max(r.speed_mph for r in outbound_valid)
                 logger.info(
                     "[TRIGGER] GPIO trigger accepted — peak %.1f mph, %d outbound readings",
-                    peak, len(outbound_valid)
+                    summary["valid_peak_outbound_mph"],
+                    summary["valid_outbound_count"],
                 )
-                self._append_diagnostic(
+                self._append_activity_diagnostic(
+                    summary,
                     accepted=True,
                     reason="accepted",
                     response_bytes=response_len,
-                    total_readings=len(all_readings),
-                    outbound_readings=len(all_outbound),
-                    inbound_readings=len(all_inbound),
-                    peak_outbound_mph=peak_outbound,
-                    peak_inbound_mph=peak_inbound,
-                    all_outbound_speeds=outbound_speeds,
-                    all_inbound_speeds=inbound_speeds,
-                    peak_outbound_magnitude=peak_out_mag,
-                    peak_inbound_magnitude=peak_in_mag,
                     trigger_latency_ms=trigger_latency,
                 )
 
@@ -789,61 +815,38 @@ class SoundTrigger(TriggerStrategy):
             )
             return None
 
-        # Log raw I/Q for ALL triggers for offline analysis
-        self._log_capture(capture, accepted=False)
-
         # Quick validation: does the capture contain any real swing data?
         # At a driving range, a nearby player's impact sound can trip the
         # trigger even though nothing was moving in front of our radar.
         # Discard these false triggers immediately so we re-arm fast.
-        timeline = processor.process_standard(capture)
-        all_readings = timeline.readings
-        all_outbound = [r for r in all_readings if r.is_outbound]
-        all_inbound = [r for r in all_readings if not r.is_outbound]
-        outbound_speeds = [r.speed_mph for r in all_outbound]
-        inbound_speeds = [r.speed_mph for r in all_inbound]
-        peak_outbound = max(outbound_speeds, default=0)
-        peak_inbound = max(inbound_speeds, default=0)
-        peak_out_mag = max((r.magnitude for r in all_outbound), default=0)
-        peak_in_mag = max((r.magnitude for r in all_inbound), default=0)
+        summary = self._summarize_capture_activity(processor, capture)
 
-        outbound_valid = [r for r in all_outbound if r.speed_mph >= 15.0]
-
-        if not outbound_valid:
-            logger.info("[TRIGGER] Sound trigger rejected — no outbound speed >= 15 mph (peak=%.1f mph, %d readings)",
-                       peak_outbound, len(all_readings))
-            self._append_diagnostic(
+        if not summary["valid_outbound_count"]:
+            logger.info(
+                "[TRIGGER] Sound trigger rejected — no outbound speed >= %.0f mph "
+                "(peak=%.1f mph, %d readings)",
+                self.MIN_VALID_OUTBOUND_MPH,
+                summary["peak_outbound_mph"],
+                summary["total_readings"],
+            )
+            self._append_activity_diagnostic(
+                summary,
                 accepted=False,
                 reason="no_outbound_speed",
                 response_bytes=response_len,
-                total_readings=len(all_readings),
-                outbound_readings=len(all_outbound),
-                inbound_readings=len(all_inbound),
-                peak_outbound_mph=peak_outbound,
-                peak_inbound_mph=peak_inbound,
-                all_outbound_speeds=outbound_speeds,
-                all_inbound_speeds=inbound_speeds,
-                peak_outbound_magnitude=peak_out_mag,
-                peak_inbound_magnitude=peak_in_mag,
             )
             return None
 
-        peak = max(r.speed_mph for r in outbound_valid)
-        logger.info("[TRIGGER] Sound trigger accepted — peak %.1f mph, %d outbound readings",
-                   peak, len(outbound_valid))
-        self._append_diagnostic(
+        logger.info(
+            "[TRIGGER] Sound trigger accepted — peak %.1f mph, %d outbound readings",
+            summary["valid_peak_outbound_mph"],
+            summary["valid_outbound_count"],
+        )
+        self._append_activity_diagnostic(
+            summary,
             accepted=True,
             reason="accepted",
             response_bytes=response_len,
-            total_readings=len(all_readings),
-            outbound_readings=len(all_outbound),
-            inbound_readings=len(all_inbound),
-            peak_outbound_mph=peak_outbound,
-            peak_inbound_mph=peak_inbound,
-            all_outbound_speeds=outbound_speeds,
-            all_inbound_speeds=inbound_speeds,
-            peak_outbound_magnitude=peak_out_mag,
-            peak_inbound_magnitude=peak_in_mag,
         )
 
         return capture

@@ -392,45 +392,6 @@ class RollingBufferProcessor:
         """
         return self._process_capture(capture, self.STEP_SIZE_OVERLAP)
 
-    def extract_ball_speeds(
-        self,
-        timeline: SpeedTimeline,
-        ball_timestamp_ms: float,
-        ball_speed_mph: float,
-        window_ms: float = 50,
-        speed_tolerance_mph: float = 5.0,
-    ) -> List[float]:
-        """
-        Extract ball speed readings around impact for spin analysis.
-
-        Uses the detected ball signal position rather than trigger offset,
-        since with all-pre-trigger buffer configurations (e.g. S#32) the
-        trigger fires at the end of the buffer while ball signal is at the
-        beginning.
-
-        Args:
-            timeline: High-resolution speed timeline
-            ball_timestamp_ms: When ball was first detected in the timeline
-            ball_speed_mph: Detected ball speed for filtering
-            window_ms: Time window after ball_timestamp_ms to analyze
-            speed_tolerance_mph: Accept readings within this range of ball_speed_mph
-
-        Returns:
-            List of ball speed values for spin analysis
-        """
-        min_speed = ball_speed_mph - speed_tolerance_mph
-        max_speed = ball_speed_mph + speed_tolerance_mph
-
-        ball_speeds = [
-            r.speed_mph
-            for r in timeline.readings
-            if r.is_outbound
-            and ball_timestamp_ms <= r.timestamp_ms <= ball_timestamp_ms + window_ms
-            and min_speed <= r.speed_mph <= max_speed
-        ]
-
-        return ball_speeds
-
     def detect_spin(
         self,
         capture: IQCapture,
@@ -445,8 +406,8 @@ class RollingBufferProcessor:
         Doppler signal with a bandpass filter, extract the amplitude envelope,
         then find the modulation frequency.
 
-        Primary: FFT on the envelope (good for irons/wedges with many cycles).
-        Fallback: Autocorrelation (more robust for drivers with few cycles).
+        Primary: FFT on the envelope. Autocorrelation is used only to
+        confirm marginal FFT picks, not to override a disagreeing FFT peak.
         """
         i_data = np.array(capture.i_samples, dtype=np.float64)
         q_data = np.array(capture.q_samples, dtype=np.float64)

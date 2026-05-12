@@ -25,11 +25,10 @@ Speed limits by sample rate:
 
 import json
 import logging
-import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 import serial
 import serial.tools.list_ports
@@ -75,21 +74,6 @@ class SpeedReading:
     unit: str = "mph"
 
 
-@dataclass
-class IQBlock:
-    """
-    A block of raw I/Q samples from the radar.
-
-    Each block contains 128 samples at 30ksps (~4.3ms of data).
-    Blocks arrive every ~31ms due to serial bandwidth limits.
-    Used for continuous I/Q streaming mode where we process
-    the FFT locally instead of using the radar's internal processing.
-    """
-    i_samples: List[int]  # Raw I channel ADC values (0-4095)
-    q_samples: List[int]  # Raw Q channel ADC values (0-4095)
-    timestamp: float      # When this block was received
-
-
 class OPS243Radar:
     """
     Driver for OPS243-A Doppler radar sensor.
@@ -126,10 +110,6 @@ class OPS243Radar:
         self.port = port
         self.baud = baud
         self.serial: Optional[serial.Serial] = None
-        self._streaming = False
-        self._stream_thread: Optional[threading.Thread] = None
-        self._iq_callback: Optional[Callable[[IQBlock], None]] = None
-        self._iq_error_callback: Optional[Callable[[str], None]] = None
         self._unit = "mph"
         self._json_mode = False
         self._magnitude_enabled = False
@@ -188,7 +168,6 @@ class OPS243Radar:
 
     def disconnect(self):
         """Disconnect from the radar sensor."""
-        self.stop_streaming()
         if self.serial and self.serial.is_open:
             self.serial.close()
             self.serial = None
@@ -623,20 +602,6 @@ class OPS243Radar:
         except (ValueError, json.JSONDecodeError) as e:
             logger.warning("[OPS] Failed to parse reading: %r - %s", line, e)
             return None
-
-    def stop_streaming(self):
-        """Stop any active I/Q streaming."""
-        self._streaming = False
-        if self._stream_thread:
-            self._stream_thread.join(timeout=2.0)
-            self._stream_thread = None
-
-        # If we were doing I/Q streaming, tell radar to stop
-        if self._iq_callback is not None:
-            self.disable_raw_iq_output()
-
-        self._iq_callback = None
-        self._iq_error_callback = None
 
     def save_config(self):
         """Save current configuration to persistent memory."""

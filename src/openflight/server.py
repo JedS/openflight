@@ -310,6 +310,23 @@ def _warn_if_kld7_buffer_underfilled(orientation: str, frame_count: int) -> None
         )
 
 
+def _kld7_angle_log_payload(angle, axis_field: str) -> Optional[dict]:
+    """Build the compact K-LD7 angle payload used in session logs."""
+    if angle is None:
+        return None
+
+    return {
+        axis_field: getattr(angle, axis_field),
+        "confidence": angle.confidence,
+        "detection_class": angle.detection_class,
+        "magnitude": angle.magnitude,
+        "num_frames": angle.num_frames,
+        "frames_examined": angle.frames_examined,
+        "frames_available": angle.frames_available,
+        "frames_ignored_stale": angle.frames_ignored_stale,
+    }
+
+
 def shot_to_dict(shot: Shot) -> dict:
     """Convert Shot to JSON-serializable dict."""
     return {
@@ -1069,26 +1086,8 @@ def on_shot_detected(shot: Shot):
                         shot_timestamp=shot_ts,
                         orientation="vertical",
                         buffer_frames=raw_buffer,
-                        ball_angle={
-                            "vertical_deg": kld7_angle.vertical_deg,
-                            "confidence": kld7_angle.confidence,
-                            "detection_class": kld7_angle.detection_class,
-                            "magnitude": kld7_angle.magnitude,
-                            "num_frames": kld7_angle.num_frames,
-                            "frames_examined": kld7_angle.frames_examined,
-                            "frames_available": kld7_angle.frames_available,
-                            "frames_ignored_stale": kld7_angle.frames_ignored_stale,
-                        } if kld7_angle else None,
-                        club_angle={
-                            "vertical_deg": club_angle_v.vertical_deg,
-                            "confidence": club_angle_v.confidence,
-                            "detection_class": club_angle_v.detection_class,
-                            "magnitude": club_angle_v.magnitude,
-                            "num_frames": club_angle_v.num_frames,
-                            "frames_examined": club_angle_v.frames_examined,
-                            "frames_available": club_angle_v.frames_available,
-                            "frames_ignored_stale": club_angle_v.frames_ignored_stale,
-                        } if club_angle_v else None,
+                        ball_angle=_kld7_angle_log_payload(kld7_angle, "vertical_deg"),
+                        club_angle=_kld7_angle_log_payload(club_angle_v, "vertical_deg"),
                     )
 
                 kld7_vertical.reset()
@@ -1138,26 +1137,8 @@ def on_shot_detected(shot: Shot):
                         shot_timestamp=shot_ts,
                         orientation="horizontal",
                         buffer_frames=raw_buffer_h,
-                        ball_angle={
-                            "horizontal_deg": kld7_angle_h.horizontal_deg,
-                            "confidence": kld7_angle_h.confidence,
-                            "detection_class": kld7_angle_h.detection_class,
-                            "magnitude": kld7_angle_h.magnitude,
-                            "num_frames": kld7_angle_h.num_frames,
-                            "frames_examined": kld7_angle_h.frames_examined,
-                            "frames_available": kld7_angle_h.frames_available,
-                            "frames_ignored_stale": kld7_angle_h.frames_ignored_stale,
-                        } if kld7_angle_h else None,
-                        club_angle={
-                            "horizontal_deg": club_angle_h.horizontal_deg,
-                            "confidence": club_angle_h.confidence,
-                            "detection_class": club_angle_h.detection_class,
-                            "magnitude": club_angle_h.magnitude,
-                            "num_frames": club_angle_h.num_frames,
-                            "frames_examined": club_angle_h.frames_examined,
-                            "frames_available": club_angle_h.frames_available,
-                            "frames_ignored_stale": club_angle_h.frames_ignored_stale,
-                        } if club_angle_h else None,
+                        ball_angle=_kld7_angle_log_payload(kld7_angle_h, "horizontal_deg"),
+                        club_angle=_kld7_angle_log_payload(club_angle_h, "horizontal_deg"),
                     )
 
                 kld7_horizontal.reset()
