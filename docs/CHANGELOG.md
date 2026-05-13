@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   real seam tones are reported at low confidence instead of dropped.
 
 ### Added
+- `scripts/analysis/replay_club_speed.py`: offline replay of a proposed
+  MEDIAN club-speed picker against any session log. Builds the same
+  candidate set the production picker uses, applies a 30 % magnitude
+  floor, and reports the median speed for each `rolling_buffer_capture`
+  alongside the originally logged (magnitude-pick) value, with smash
+  factors as a physical sanity check. The script is exploratory and
+  does not change production behaviour — it lets us inspect what a
+  median-based picker would have produced before committing to a code
+  change.
 - `scripts/analysis/plot_spin_debug.py`: 4-panel diagnostic for a single
   `rolling_buffer_capture` (speed timeline, raw I/Q, bandpass envelope,
   envelope FFT spectrum) to inspect what the spin algorithm saw and why
