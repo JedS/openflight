@@ -672,8 +672,8 @@ class TestRollingBufferMonitorSpinPlausibility:
         assert shot.spin_rejection_reason is not None
         assert "plausibility floor" in shot.spin_rejection_reason
 
-    def test_lower_rail_driver_spin_can_still_pass(self):
-        """Low-spin driver candidates should not be rejected by club floor."""
+    def test_lower_rail_driver_spin_kept_diagnostic_only(self):
+        """Rail picks should be logged but not exposed as measured spin."""
         from openflight.rolling_buffer import RollingBufferMonitor
 
         monitor = RollingBufferMonitor(port=None, trigger_type="manual")
@@ -691,9 +691,35 @@ class TestRollingBufferMonitorSpinPlausibility:
         shot = monitor._create_shot(processed)
 
         assert shot is not None
-        assert shot.spin_rpm == 3296
-        assert shot.spin_quality == "high"
-        assert shot.spin_rejection_reason is None
+        assert shot.spin_rpm is None
+        assert shot.spin_snr == pytest.approx(12.99)
+        assert shot.spin_rejection_reason == (
+            "Lower-rail spin candidate 3296 RPM kept as diagnostic only"
+        )
+
+    def test_low_quality_spin_withheld_from_shot_metrics(self):
+        """Low-confidence spin should remain diagnostic, not user-facing."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="manual")
+        monitor.set_club(ClubType.DRIVER)
+        processed = self._processed_with_spin(SpinResult(
+            spin_rpm=3296,
+            confidence=0.3,
+            snr=2.88,
+            quality="low",
+            peak_freq_hz=54.931640625,
+            seam_cycles=3.8,
+            at_lower_rail=True,
+        ))
+
+        shot = monitor._create_shot(processed)
+
+        assert shot is not None
+        assert shot.spin_rpm is None
+        assert shot.spin_snr == pytest.approx(2.88)
+        assert shot.spin_peak_freq_hz == pytest.approx(54.931640625)
+        assert shot.spin_rejection_reason == "Spin confidence too low (0.30)"
 
 
 # =============================================================================

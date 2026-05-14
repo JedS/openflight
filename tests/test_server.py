@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+
 from openflight import server as server_module
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
@@ -360,6 +361,17 @@ class TestRadarLaunchGuard:
 
         assert plausible is True
         assert details["delta_deg"] < details["allowed_delta_deg"]
+
+    def test_accepts_low_iron_launch(self):
+        """Thin/low iron shots are real and should not be replaced by estimates."""
+        plausible, details = radar_launch_is_plausible(
+            radar_angle_deg=6.9,
+            club=ClubType.IRON_9,
+            ball_speed_mph=54.8,
+        )
+
+        assert plausible is True
+        assert details["delta_deg"] > details["allowed_delta_deg"]
 
     def test_flags_known_outliers_in_real_session_log(self):
         """Historic backyard session log should surface the same three driver outliers."""

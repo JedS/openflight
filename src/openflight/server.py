@@ -240,8 +240,12 @@ def radar_launch_is_plausible(
         1.0 - estimate_conf
     ) * _RADAR_SANITY_LOW_CONF_BONUS_DEG
     delta_deg = abs(radar_angle_deg - expected_launch_deg)
+    if radar_angle_deg <= expected_launch_deg:
+        plausible = 0.0 <= radar_angle_deg <= 45.0
+    else:
+        plausible = delta_deg <= allowed_delta_deg
 
-    return delta_deg <= allowed_delta_deg, {
+    return plausible, {
         "skipped": False,
         "expected_launch_deg": round(expected_launch_deg, 1),
         "allowed_delta_deg": round(allowed_delta_deg, 1),

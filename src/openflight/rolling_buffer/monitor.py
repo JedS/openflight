@@ -673,15 +673,33 @@ class RollingBufferMonitor:
 
         # Calculate carry distance.
         # Use spin-adjusted carry only for reliable, plausible spin readings.
-        has_any_spin = (
-            spin is not None
-            and spin.spin_rpm > 0
-            and club_spin_rejection_reason is None
-        )
         has_reliable_spin = bool(
             processed.has_spin
             and club_spin_rejection_reason is None
+            and spin is not None
+            and not spin.at_lower_rail
+            and not spin.at_upper_rail
         )
+        if (
+            spin is not None
+            and spin.spin_rpm > 0
+            and club_spin_rejection_reason is None
+            and not has_reliable_spin
+        ):
+            if not spin.is_reliable:
+                spin_rejection_reason = (
+                    f"Spin confidence too low ({spin.confidence:.2f})"
+                )
+            elif spin.at_lower_rail:
+                spin_rejection_reason = (
+                    f"Lower-rail spin candidate {spin.spin_rpm:.0f} RPM "
+                    "kept as diagnostic only"
+                )
+            elif spin.at_upper_rail:
+                spin_rejection_reason = (
+                    f"Upper-rail spin candidate {spin.spin_rpm:.0f} RPM "
+                    "kept as diagnostic only"
+                )
 
         if has_reliable_spin:
             carry = estimate_carry_with_spin(
@@ -693,11 +711,9 @@ class RollingBufferMonitor:
         else:
             carry = estimate_carry_distance(processed.ball_speed_mph, self._current_club)
 
-        # Always pass spin data through if detected (even low quality)
-        # The UI shows confidence indicators so the user can judge
-        spin_rpm = spin.spin_rpm if has_any_spin else None
-        spin_confidence = spin.confidence if has_any_spin else None
-        spin_result_quality = spin.quality if has_any_spin else None
+        spin_rpm = spin.spin_rpm if has_reliable_spin else None
+        spin_confidence = spin.confidence if has_reliable_spin else None
+        spin_result_quality = spin.quality if has_reliable_spin else None
 
         # Create shot with extended fields
         shot = Shot(
