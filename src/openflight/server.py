@@ -29,6 +29,10 @@ from .session_logger import get_session_logger, init_session_logger
 logger = logging.getLogger(__name__)
 
 # Camera imports (optional)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_DIST_DIR = REPO_ROOT / "ui" / "dist"
+FRONTEND_SOURCE_DIR = REPO_ROOT / "ui"
+
 try:
     import cv2
 
@@ -47,7 +51,7 @@ except ImportError:
     PICAMERA_AVAILABLE = False
 
 
-app = Flask(__name__, static_folder="../../ui/dist", static_url_path="")
+app = Flask(__name__, static_folder=str(FRONTEND_DIST_DIR), static_url_path="")
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
@@ -143,6 +147,19 @@ _MAX_SPIN_ADJ = 2.0
 # they are meant to catch obvious K-LD7 false positives, not to micromanage
 # normal shot-to-shot variation or mishits.
 _RADAR_SANITY_LOW_CONF_BONUS_DEG = 5.0
+
+
+def _react_app_dir() -> Path:
+    """Return the best available directory containing the React index file."""
+    candidates = [
+        Path(app.static_folder) if app.static_folder else FRONTEND_DIST_DIR,
+        FRONTEND_DIST_DIR,
+        FRONTEND_SOURCE_DIR,
+    ]
+    for candidate in candidates:
+        if (candidate / "index.html").is_file():
+            return candidate
+    return candidates[0]
 
 
 def estimate_launch_angle(
@@ -415,13 +432,13 @@ def shot_to_dict(shot: Shot) -> dict:
 @app.route("/")
 def index():
     """Serve the React app."""
-    return send_from_directory(app.static_folder, "index.html")
+    return send_from_directory(_react_app_dir(), "index.html")
 
 
 @app.route("/display", strict_slashes=False)
 def display():
     """Serve the React app for TV display mode."""
-    return send_from_directory(app.static_folder, "index.html")
+    return send_from_directory(_react_app_dir(), "index.html")
 
 
 @app.route("/<path:path>")

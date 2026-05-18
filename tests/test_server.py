@@ -39,6 +39,17 @@ class TestStaticRoutes:
         assert response.status_code == 200
         assert b'<div id="root"></div>' in response.data
 
+    def test_display_route_falls_back_when_dist_missing(self, monkeypatch, tmp_path):
+        """Clean checkouts without ui/dist should still serve the React shell."""
+        monkeypatch.setattr(server_module, "FRONTEND_DIST_DIR", tmp_path / "missing-dist")
+        monkeypatch.setattr(server_module.app, "static_folder", str(tmp_path / "missing-dist"))
+
+        client = server_module.app.test_client()
+        response = client.get("/display")
+
+        assert response.status_code == 200
+        assert b'<div id="root"></div>' in response.data
+
 
 class TestShotToDict:
     """Tests for shot_to_dict conversion."""
