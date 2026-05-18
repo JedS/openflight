@@ -69,6 +69,17 @@ scripts/start-kiosk.sh --mock
 
 Then open http://localhost:8080 or use the touchscreen.
 
+### TV Display Mode
+
+OpenFlight also serves a fullscreen-friendly browser display for tablets, TV browsers, or a Chrome tab cast to Chromecast.
+
+1. Start OpenFlight as usual with `scripts/start-kiosk.sh`.
+2. Find the OpenFlight host IP address on your LAN.
+3. Open `http://<openflight-host-ip>:8080/display` from another laptop, tablet, or TV browser.
+4. For Chromecast, open the display page in Chrome and use Chrome's built-in **Cast** feature to cast the tab.
+
+This is browser/tab casting only. OpenFlight does not include native Cast SDK support yet.
+
 ## How It Works
 
 ### System Architecture

@@ -18,6 +18,28 @@ from openflight.server import (
 )
 
 
+class TestStaticRoutes:
+    """Tests for frontend static routes."""
+
+    def test_display_route_serves_react_app(self):
+        """Direct refresh of /display should return the React app."""
+        client = server_module.app.test_client()
+
+        response = client.get("/display")
+
+        assert response.status_code == 200
+        assert b'<div id="root"></div>' in response.data
+
+    def test_display_route_accepts_trailing_slash(self):
+        """TV browsers may preserve a trailing slash on /display/."""
+        client = server_module.app.test_client()
+
+        response = client.get("/display/")
+
+        assert response.status_code == 200
+        assert b'<div id="root"></div>' in response.data
+
+
 class TestShotToDict:
     """Tests for shot_to_dict conversion."""
 

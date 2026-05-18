@@ -8,6 +8,7 @@ import { CameraFeed } from './components/CameraFeed';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { ClubPicker } from './components/ClubPicker';
 import { BallDetectionIndicator } from './components/BallDetectionIndicator';
+import { DisplayMode } from './components/DisplayMode';
 import {
   LaunchDaddyProvider,
   useLaunchDaddy,
@@ -86,6 +87,8 @@ function AppContent() {
   const [showShutdown, setShowShutdown] = useState(false);
   const { isLaunchDaddyMode, isExploding, triggerExplosion, handleSecretTap } = useLaunchDaddy();
   const { unitSystem, setUnitSystem } = useUnitPreference();
+  const isDisplayRoute =
+    typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
 
   // Trigger explosion when a new shot is detected in Launch Daddy mode
   useEffect(() => {
@@ -99,6 +102,17 @@ function AppContent() {
     setSelectedClub(club);
     setClub(club);
   };
+
+  if (isDisplayRoute) {
+    return (
+      <DisplayMode
+        connected={connected}
+        cameraStatus={cameraStatus}
+        latestShot={latestShot}
+        shots={shots}
+      />
+    );
+  }
 
   return (
     <div className={`app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>

@@ -418,6 +418,12 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@app.route("/display", strict_slashes=False)
+def display():
+    """Serve the React app for TV display mode."""
+    return send_from_directory(app.static_folder, "index.html")
+
+
 @app.route("/<path:path>")
 def static_files(path):
     """Serve static files."""
