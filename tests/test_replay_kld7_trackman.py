@@ -126,9 +126,38 @@ def test_load_buffers_decodes_experimental_radc_payload(tmp_path):
         encoding="utf-8",
     )
 
-    buffers = replay.load_buffers(log)
+    buffers = replay.load_buffers(log, jsonl_window_before_s=2.0)
 
     assert buffers[(10, "vertical")][0]["radc"] == b"\x00" * replay.RADC_PAYLOAD_BYTES
+
+
+def test_load_buffers_filters_jsonl_radc_frames_to_live_shot_window(tmp_path):
+    log = tmp_path / "session.jsonl"
+    log.write_text(
+        json.dumps(
+            {
+                "type": "kld7_buffer",
+                "shot_number": 10,
+                "shot_timestamp": 100.0,
+                "orientation": "vertical",
+                "frames": [
+                    {"timestamp": 97.9, "pdat": [], "radc_b64": VALID_RADC_B64},
+                    {"timestamp": 98.0, "pdat": [], "radc_b64": VALID_RADC_B64},
+                    {"timestamp": 100.5, "pdat": [], "radc_b64": VALID_RADC_B64},
+                    {"timestamp": 100.8, "pdat": [], "radc_b64": VALID_RADC_B64},
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    buffers = replay.load_buffers(log, jsonl_window_before_s=2.0)
+
+    assert [frame["timestamp"] for frame in buffers[(10, "vertical")]] == [
+        98.0,
+        100.5,
+    ]
 
 
 def test_load_buffers_rejects_wrong_size_experimental_radc_payload(tmp_path):
@@ -147,7 +176,7 @@ def test_load_buffers_rejects_wrong_size_experimental_radc_payload(tmp_path):
     )
 
     with pytest.raises(ValueError, match="invalid radc_b64 payload size"):
-        replay.load_buffers(log)
+        replay.load_buffers(log, jsonl_window_before_s=2.0)
 
 
 def test_jsonl_capture_info_reads_session_wall_clock_bounds(tmp_path):
@@ -297,7 +326,20 @@ def test_replay_one_reports_trackman_error(monkeypatch):
 
     def fake_extract_launch_angle(frames, **kwargs):
         calls.append((frames, kwargs))
-        return [{"launch_angle_deg": 11.6, "frame_count": 2, "avg_snr_db": 7.2}]
+        return [
+            {
+                "launch_angle_deg": 4.0,
+                "frame_count": 2,
+                "avg_snr_db": 7.2,
+                "impact_frames": [1],
+            },
+            {
+                "launch_angle_deg": 11.6,
+                "frame_count": 2,
+                "avg_snr_db": 7.2,
+                "impact_frames": [8],
+            },
+        ]
 
     monkeypatch.setattr(replay, "extract_launch_angle", fake_extract_launch_angle)
 
@@ -315,7 +357,39 @@ def test_replay_one_reports_trackman_error(monkeypatch):
     assert calls[0][1]["ops_bin_outlier_tol"] == 12
     assert calls[0][1]["ops_bin_outlier_penalty"] == 4.0
     assert calls[0][1]["ops_anchored_peak_min_snr"] == 5.0
+    assert calls[0][1]["require_ops_anchored_peak"] is False
     assert calls[0][1]["horizontal_angle_limit_deg"] == 15.0
+    assert calls[0][1]["angle_offset_deg"] == 0.0
+
+
+def test_replay_one_uses_axis_specific_angle_offsets(monkeypatch):
+    target = replay.TrackmanTarget(
+        shot_number=10,
+        orientation="horizontal",
+        trackman_angle_deg=1.0,
+        ball_speed_mph=150.0,
+        club="driver",
+    )
+    params = replay.ReplayParams(
+        speed_tolerance_mph=8.0,
+        impact_energy_threshold=2.0,
+        centroid_floor_frac=0.75,
+        ops_bin_outlier_tol=12,
+        ops_bin_outlier_penalty=4.0,
+        vertical_angle_offset_deg=8.0,
+        horizontal_angle_offset_deg=-1.5,
+    )
+    calls = []
+
+    def fake_extract_launch_angle(frames, **kwargs):
+        calls.append(kwargs)
+        return [{"launch_angle_deg": 0.5, "frame_count": 1, "avg_snr_db": 8.0}]
+
+    monkeypatch.setattr(replay, "extract_launch_angle", fake_extract_launch_angle)
+
+    replay.replay_one(target, [{"timestamp": 1.0, "radc": b"abc"}], params)
+
+    assert calls[0]["angle_offset_deg"] == -1.5
 
 
 def test_summarize_reports_mae_and_max_error():
@@ -499,7 +573,7 @@ def test_summary_csv_row_includes_ranked_metrics():
     row = replay._summary_csv_row(summary, 29, min_detection_rate=1.0)
 
     assert row == (
-        "29,8,0.25,0.75,25,1,5,15,6,4,0.667,1,1.234,2.345,3.456,False,no_radc_detection:2|ok:4"
+        "29,8,0.25,0.75,25,1,5,False,15,0,0,6,4,0.667,1,1.234,2.345,3.456,False,no_radc_detection:2|ok:4"
     )
 
 
@@ -532,7 +606,10 @@ def test_write_rows_includes_replay_parameters(tmp_path):
     assert written[0]["ops_bin_outlier_tol"] == "12"
     assert written[0]["ops_bin_outlier_penalty"] == "4.0"
     assert written[0]["ops_anchored_peak_min_snr"] == "5.0"
+    assert written[0]["require_ops_anchored_peak"] == "False"
     assert written[0]["horizontal_angle_limit_deg"] == "15.0"
+    assert written[0]["vertical_angle_offset_deg"] == "0.0"
+    assert written[0]["horizontal_angle_offset_deg"] == "0.0"
 
 
 def test_write_summary_includes_best_params_and_gate_result(tmp_path):
@@ -568,7 +645,10 @@ def test_write_summary_includes_best_params_and_gate_result(tmp_path):
         "ops_bin_outlier_tol": 12,
         "ops_bin_outlier_penalty": 4.0,
         "ops_anchored_peak_min_snr": 5.0,
+        "require_ops_anchored_peak": False,
         "horizontal_angle_limit_deg": 15.0,
+        "vertical_angle_offset_deg": 0.0,
+        "horizontal_angle_offset_deg": 0.0,
     }
     assert payload["eligible"] is True
     assert payload["passes_within_half_degree_gate"] is True

@@ -113,6 +113,7 @@ class OPS243Radar:
         self._unit = "mph"
         self._json_mode = False
         self._magnitude_enabled = False
+        self.last_hardware_trigger_first_byte_timestamp: Optional[float] = None
 
     @staticmethod
     def find_radar_ports() -> List[str]:
@@ -842,14 +843,17 @@ class OPS243Radar:
         start_time = time.time()
         last_data_time = None
         bytes_received = 0
+        self.last_hardware_trigger_first_byte_timestamp = None
 
         while (time.time() - start_time) < timeout:
             if self.serial.in_waiting:
+                first_byte_timestamp = time.time() if last_data_time is None else None
                 chunk = self.serial.read(self.serial.in_waiting)
                 response_lines.append(chunk.decode('ascii', errors='ignore'))
                 bytes_received += len(chunk)
-                if last_data_time is None:
-                    last_data_time = time.time()
+                if first_byte_timestamp is not None:
+                    last_data_time = first_byte_timestamp
+                    self.last_hardware_trigger_first_byte_timestamp = last_data_time
                     logger.debug("[OPS] Hardware trigger: first byte after %.1fs", last_data_time - start_time)
                 else:
                     last_data_time = time.time()

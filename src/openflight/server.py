@@ -342,7 +342,28 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
 _KLD7_FRAME_HZ = 34.0
 _KLD7_BUFFER_SECONDS = 6.0
 _KLD7_BUFFER_UNDERFILL_FRAC = 0.5
+_KLD7_POST_SHOT_CAPTURE_DELAY_S = 0.18
+_MIN_VERTICAL_RADAR_CONFIDENCE = 0.80
 _MIN_HORIZONTAL_RADAR_CONFIDENCE = 0.40
+
+
+def _maybe_wait_for_kld7_post_shot_frames(shot_timestamp: float) -> None:
+    """Let the K-LD7 stream collect post-impact RADC frames for extraction.
+
+    TrackMan test logs showed immediate snapshots ending at or just before
+    the OPS impact timestamp, leaving the configured post-shot extraction
+    window empty. Wait only until the bounded target time; if processing is
+    already past that point, this adds no latency.
+    """
+    target_time = shot_timestamp + _KLD7_POST_SHOT_CAPTURE_DELAY_S
+    delay_s = target_time - time.time()
+    if delay_s <= 0:
+        return
+    logger.info(
+        "[SERVER] Waiting %.0fms for post-impact K-LD7 RADC frames",
+        delay_s * 1000.0,
+    )
+    time.sleep(delay_s)
 
 
 def _warn_if_kld7_buffer_underfilled(orientation: str, frame_count: int) -> None:
@@ -416,6 +437,31 @@ def _warn_if_kld7_raw_payload_missing(
         orientation,
         payload_frames,
         radc_frames,
+    )
+
+
+def _warn_if_kld7_snapshot_lacks_post_shot_frames(
+    orientation: str,
+    buffer_frames: list,
+    shot_timestamp: float,
+    *,
+    raw_payload_expected: bool,
+) -> None:
+    """Warn when a TrackMan replay snapshot cannot contain post-impact ball frames."""
+    if not raw_payload_expected or not buffer_frames:
+        return
+    post_shot_frames = [
+        frame
+        for frame in buffer_frames
+        if frame.get("timestamp") is not None and float(frame["timestamp"]) > shot_timestamp
+    ]
+    if post_shot_frames:
+        return
+    logger.warning(
+        "[SERVER] K-LD7 %s snapshot has no frames after shot timestamp %.3f; "
+        "angle replay may be using pre-impact clutter.",
+        orientation,
+        shot_timestamp,
     )
 
 
@@ -1326,6 +1372,8 @@ def on_shot_detected(shot: Shot):
             kld7_start = time.time()
             shot_ts = shot.impact_timestamp or kld7_start
             session_log = get_session_logger()
+            if kld7_vertical or kld7_horizontal:
+                _maybe_wait_for_kld7_post_shot_frames(shot_ts)
 
             # --- Vertical K-LD7 (launch angle) ---
             if kld7_vertical:
@@ -1338,6 +1386,12 @@ def on_shot_detected(shot: Shot):
                 _warn_if_kld7_raw_payload_missing(
                     "vertical",
                     raw_buffer,
+                    raw_payload_expected=raw_payload_expected,
+                )
+                _warn_if_kld7_snapshot_lacks_post_shot_frames(
+                    "vertical",
+                    raw_buffer,
+                    shot_ts,
                     raw_payload_expected=raw_payload_expected,
                 )
                 kld7_angle = kld7_vertical.get_angle_for_shot(
@@ -1368,7 +1422,22 @@ def on_shot_detected(shot: Shot):
                         club_speed_mph=shot.club_speed_mph,
                         spin_rpm=shot.spin_rpm,
                     )
-                    if accepted:
+                    if not accepted:
+                        logger.warning(
+                            "[SERVER] Vertical angle %.1f° rejected: expected %.1f° ± %.1f°",
+                            kld7_angle.vertical_deg,
+                            guard_details["expected_launch_deg"],
+                            guard_details["allowed_delta_deg"],
+                        )
+                    elif kld7_angle.confidence < _MIN_VERTICAL_RADAR_CONFIDENCE:
+                        logger.warning(
+                            "[SERVER] Vertical angle %.1f° rejected: low confidence %.0f%% "
+                            "(need %.0f%%)",
+                            kld7_angle.vertical_deg,
+                            kld7_angle.confidence * 100,
+                            _MIN_VERTICAL_RADAR_CONFIDENCE * 100,
+                        )
+                    else:
                         shot.launch_angle_vertical = kld7_angle.vertical_deg
                         shot.launch_angle_confidence = kld7_angle.confidence
                         shot.launch_angle_vertical_confidence = kld7_angle.confidence
@@ -1379,13 +1448,6 @@ def on_shot_detected(shot: Shot):
                             kld7_angle.vertical_deg,
                             kld7_angle.confidence * 100,
                             kld7_angle.num_frames,
-                        )
-                    else:
-                        logger.warning(
-                            "[SERVER] Vertical angle %.1f° rejected: expected %.1f° ± %.1f°",
-                            kld7_angle.vertical_deg,
-                            guard_details["expected_launch_deg"],
-                            guard_details["allowed_delta_deg"],
                         )
                 # Club angle of attack (same RADC buffer, club speed from OPS).
                 # Compute BEFORE logging the buffer so the log entry can
@@ -1444,6 +1506,12 @@ def on_shot_detected(shot: Shot):
                 _warn_if_kld7_raw_payload_missing(
                     "horizontal",
                     raw_buffer_h,
+                    raw_payload_expected=raw_payload_expected_h,
+                )
+                _warn_if_kld7_snapshot_lacks_post_shot_frames(
+                    "horizontal",
+                    raw_buffer_h,
+                    shot_ts,
                     raw_payload_expected=raw_payload_expected_h,
                 )
                 kld7_angle_h = kld7_horizontal.get_angle_for_shot(

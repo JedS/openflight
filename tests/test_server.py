@@ -808,6 +808,64 @@ class TestKLD7RawPayloadWarning:
         assert warns
 
 
+class TestKLD7PostShotSnapshotWarning:
+    """TrackMan replay snapshots should include frames after the OPS impact timestamp."""
+
+    def test_no_post_shot_frames_warns_when_expected(self, caplog):
+        import logging
+
+        from openflight.server import _warn_if_kld7_snapshot_lacks_post_shot_frames
+
+        with caplog.at_level(logging.WARNING, logger="openflight.server"):
+            _warn_if_kld7_snapshot_lacks_post_shot_frames(
+                "vertical",
+                [{"timestamp": 99.9, "has_radc": True}, {"timestamp": 100.0, "has_radc": True}],
+                100.0,
+                raw_payload_expected=True,
+            )
+
+        warns = [r for r in caplog.records if "no frames after shot timestamp" in r.message]
+        assert warns
+
+    def test_post_shot_frames_do_not_warn(self, caplog):
+        import logging
+
+        from openflight.server import _warn_if_kld7_snapshot_lacks_post_shot_frames
+
+        with caplog.at_level(logging.WARNING, logger="openflight.server"):
+            _warn_if_kld7_snapshot_lacks_post_shot_frames(
+                "vertical",
+                [{"timestamp": 99.9, "has_radc": True}, {"timestamp": 100.1, "has_radc": True}],
+                100.0,
+                raw_payload_expected=True,
+            )
+
+        warns = [r for r in caplog.records if "no frames after shot timestamp" in r.message]
+        assert not warns
+
+
+class TestKLD7PostShotCaptureDelay:
+    """Live K-LD7 extraction should include post-impact frames."""
+
+    def test_waits_until_post_shot_capture_time(self, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(server_module.time, "time", lambda: 1000.0)
+        monkeypatch.setattr(server_module.time, "sleep", lambda delay: sleeps.append(delay))
+
+        server_module._maybe_wait_for_kld7_post_shot_frames(1000.0)
+
+        assert sleeps == [pytest.approx(0.18)]
+
+    def test_does_not_wait_when_processing_is_already_past_capture_time(self, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(server_module.time, "time", lambda: 1000.2)
+        monkeypatch.setattr(server_module.time, "sleep", lambda delay: sleeps.append(delay))
+
+        server_module._maybe_wait_for_kld7_post_shot_frames(1000.0)
+
+        assert sleeps == []
+
+
 class TestOnShotDetected:
     """Tests for live shot processing in the server."""
 
@@ -1039,6 +1097,46 @@ class TestOnShotDetected:
         assert shot.launch_angle_vertical_source == "radar"
         assert shot.launch_angle_confidence == pytest.approx(0.89)
         assert shot.angle_source == "radar"
+
+    def test_low_confidence_vertical_kld7_angle_falls_back_to_estimate(self, monkeypatch):
+        """Weak vertical radar candidates should not override the launch model."""
+
+        class StubTracker:
+            orientation = "vertical"
+
+            def snapshot_buffer(self):
+                return []
+
+            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
+                return KLD7Angle(vertical_deg=10.7, confidence=0.72, num_frames=6)
+
+            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
+                return None
+
+            def reset(self):
+                return None
+
+        monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+        shot = Shot(
+            ball_speed_mph=52.94928729492188,
+            club_speed_mph=40.32291878613282,
+            timestamp=datetime.now(),
+            club=ClubType.IRON_9,
+        )
+
+        on_shot_detected(shot)
+
+        assert shot.launch_angle_vertical_source == "estimated"
+        assert shot.angle_source == "estimated"
+        assert shot.launch_angle_vertical == pytest.approx(35.3)
 
     def test_vertical_estimate_preserves_radar_horizontal(self, monkeypatch):
         """Vertical fallback should not erase a horizontal radar measurement."""

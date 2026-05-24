@@ -20,6 +20,7 @@ try:
         parse_radc_payload,
         radc_capture_diagnostics,
         radc_frame_diagnostics,
+        select_best_shot_result,
         to_complex_iq,
     )
 except ImportError:
@@ -36,6 +37,7 @@ except ImportError:
         parse_radc_payload,
         radc_capture_diagnostics,
         radc_frame_diagnostics,
+        select_best_shot_result,
         to_complex_iq,
     )
 
@@ -48,6 +50,21 @@ from kld7_radc_lib import (
     estimate_angle_from_phase,
     process_radc_frame,
 )
+
+
+def test_select_best_shot_result_prefers_latest_impact_group():
+    results = [
+        {"launch_angle_deg": 4.0, "impact_frames": [2, 3]},
+        {"launch_angle_deg": 12.0, "impact_frames": [40, 42]},
+        {"launch_angle_deg": 8.0, "impact_frames": [20]},
+    ]
+
+    assert select_best_shot_result(results)["launch_angle_deg"] == 12.0
+
+
+def test_select_best_shot_result_rejects_empty_results():
+    with pytest.raises(ValueError, match="at least one result"):
+        select_best_shot_result([])
 
 
 class TestParseRadcPayload:

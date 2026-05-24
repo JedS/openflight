@@ -34,6 +34,7 @@ from openflight.kld7.radc import (  # noqa: E402
     RADC_PAYLOAD_BYTES,
     extract_launch_angle,
     radc_capture_diagnostics,
+    select_best_shot_result,
 )
 
 
@@ -56,7 +57,10 @@ class ReplayParams:
     ops_bin_outlier_tol: int
     ops_bin_outlier_penalty: float
     ops_anchored_peak_min_snr: float = 5.0
+    require_ops_anchored_peak: bool = False
     horizontal_angle_limit_deg: float = 15.0
+    vertical_angle_offset_deg: float = 0.0
+    horizontal_angle_offset_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -157,6 +161,21 @@ def _parse_axis(raw: str) -> str:
         raise argparse.ArgumentTypeError(
             "expected one of: all, vertical, v, horizontal, h"
         ) from error
+
+
+def _filter_frames_to_shot_window(
+    frames: list[dict[str, Any]],
+    shot_timestamp: float | None,
+    *,
+    window_before_s: float,
+    window_after_s: float,
+) -> list[dict[str, Any]]:
+    """Mirror live KLD7Tracker shot-time filtering for JSONL replay."""
+    if shot_timestamp is None:
+        return frames
+    start = shot_timestamp - max(0.0, float(window_before_s))
+    end = shot_timestamp + max(0.0, float(window_after_s))
+    return [frame for frame in frames if start <= float(frame["timestamp"]) <= end]
 
 
 def _percentile(values: list[float], p: float) -> float | None:
@@ -483,7 +502,12 @@ def pickle_first_shot_candidates(
     return list(range(first, last + 1))
 
 
-def load_jsonl_buffers(openflight_jsonl: Path) -> dict[tuple[int, str], list[dict[str, Any]]]:
+def load_jsonl_buffers(
+    openflight_jsonl: Path,
+    *,
+    window_before_s: float = 6.0,
+    window_after_s: float = 0.75,
+) -> dict[tuple[int, str], list[dict[str, Any]]]:
     """Load and decode experimental K-LD7 buffers keyed by shot/orientation."""
     buffers: dict[tuple[int, str], list[dict[str, Any]]] = {}
     with openflight_jsonl.open("r", encoding="utf-8") as handle:
@@ -504,6 +528,13 @@ def load_jsonl_buffers(openflight_jsonl: Path) -> dict[tuple[int, str], list[dic
             if shot_number is None or orientation not in {"vertical", "horizontal"}:
                 continue
             frames = _validate_frames(shot_number, entry, require_radc_payload_size=True)
+            shot_timestamp = _to_float(entry.get("shot_timestamp"))
+            frames = _filter_frames_to_shot_window(
+                frames,
+                shot_timestamp,
+                window_before_s=window_before_s,
+                window_after_s=window_after_s,
+            )
             buffers[(shot_number, orientation)] = frames
     return buffers
 
@@ -514,6 +545,8 @@ def load_buffers(
     pickle_first_shot_number: int = 1,
     pickle_buffer_seconds: float = 6.0,
     pickle_shot_window_after_s: float = 0.75,
+    jsonl_window_before_s: float = 6.0,
+    jsonl_window_after_s: float = 0.75,
 ) -> dict[tuple[int, str], list[dict[str, Any]]]:
     """Load experimental JSONL or standalone raw-RADC pickle buffers."""
     if openflight_path.suffix == ".pkl":
@@ -523,7 +556,11 @@ def load_buffers(
             buffer_seconds=pickle_buffer_seconds,
             shot_window_after_s=pickle_shot_window_after_s,
         )
-    return load_jsonl_buffers(openflight_path)
+    return load_jsonl_buffers(
+        openflight_path,
+        window_before_s=jsonl_window_before_s,
+        window_after_s=jsonl_window_after_s,
+    )
 
 
 def replay_one(
@@ -565,12 +602,18 @@ def replay_one(
     results = extract_launch_angle(
         frames,
         ops243_ball_speed_mph=target.ball_speed_mph,
+        angle_offset_deg=(
+            params.horizontal_angle_offset_deg
+            if target.orientation == "horizontal"
+            else params.vertical_angle_offset_deg
+        ),
         speed_tolerance_mph=params.speed_tolerance_mph,
         impact_energy_threshold=params.impact_energy_threshold,
         centroid_floor_frac=params.centroid_floor_frac,
         ops_bin_outlier_tol=params.ops_bin_outlier_tol,
         ops_bin_outlier_penalty=params.ops_bin_outlier_penalty,
         ops_anchored_peak_min_snr=params.ops_anchored_peak_min_snr,
+        require_ops_anchored_peak=params.require_ops_anchored_peak,
         horizontal_angle_limit_deg=params.horizontal_angle_limit_deg,
         orientation=target.orientation,
     )
@@ -590,7 +633,7 @@ def replay_one(
             detection_frame_count=0,
         )
 
-    best = results[0]
+    best = select_best_shot_result(results)
     replay_angle = float(best["launch_angle_deg"])
     error = replay_angle - target.trackman_angle_deg
     detection_frame_count = int(best.get("frame_count") or 0)
@@ -711,7 +754,10 @@ def write_rows(path: Path, rows: list[ReplayRow], params: ReplayParams) -> None:
                 "ops_bin_outlier_tol",
                 "ops_bin_outlier_penalty",
                 "ops_anchored_peak_min_snr",
+                "require_ops_anchored_peak",
                 "horizontal_angle_limit_deg",
+                "vertical_angle_offset_deg",
+                "horizontal_angle_offset_deg",
             ],
         )
         writer.writeheader()
@@ -737,7 +783,10 @@ def write_rows(path: Path, rows: list[ReplayRow], params: ReplayParams) -> None:
                     "ops_bin_outlier_tol": params.ops_bin_outlier_tol,
                     "ops_bin_outlier_penalty": params.ops_bin_outlier_penalty,
                     "ops_anchored_peak_min_snr": params.ops_anchored_peak_min_snr,
+                    "require_ops_anchored_peak": params.require_ops_anchored_peak,
                     "horizontal_angle_limit_deg": params.horizontal_angle_limit_deg,
+                    "vertical_angle_offset_deg": params.vertical_angle_offset_deg,
+                    "horizontal_angle_offset_deg": params.horizontal_angle_offset_deg,
                 }
             )
 
@@ -750,7 +799,10 @@ def _replay_params_payload(params: ReplayParams) -> dict[str, float | int]:
         "ops_bin_outlier_tol": params.ops_bin_outlier_tol,
         "ops_bin_outlier_penalty": params.ops_bin_outlier_penalty,
         "ops_anchored_peak_min_snr": params.ops_anchored_peak_min_snr,
+        "require_ops_anchored_peak": params.require_ops_anchored_peak,
         "horizontal_angle_limit_deg": params.horizontal_angle_limit_deg,
+        "vertical_angle_offset_deg": params.vertical_angle_offset_deg,
+        "horizontal_angle_offset_deg": params.horizontal_angle_offset_deg,
     }
 
 
@@ -1002,8 +1054,9 @@ def _summary_sort_key(
 def _summary_csv_header() -> str:
     return (
         "pickle_first_shot,speed_tol,impact_energy,centroid_floor,ops_bin_tol,"
-        "ops_bin_penalty,ops_anchored_min_snr,horizontal_angle_limit,attempted,detected,"
-        "detection_rate,within_0.5,mae,p90_abs,max_abs,eligible,reason_counts"
+        "ops_bin_penalty,ops_anchored_min_snr,require_ops_anchor,horizontal_angle_limit,"
+        "vertical_angle_offset,horizontal_angle_offset,attempted,detected,detection_rate,"
+        "within_0.5,mae,p90_abs,max_abs,eligible,reason_counts"
     )
 
 
@@ -1019,7 +1072,8 @@ def _summary_csv_row(
         f"{first_shot_number},{p.speed_tolerance_mph:g},{p.impact_energy_threshold:g},"
         f"{p.centroid_floor_frac:g},{p.ops_bin_outlier_tol},"
         f"{p.ops_bin_outlier_penalty:g},{p.ops_anchored_peak_min_snr:g},"
-        f"{p.horizontal_angle_limit_deg:g},"
+        f"{p.require_ops_anchored_peak},{p.horizontal_angle_limit_deg:g},"
+        f"{p.vertical_angle_offset_deg:g},{p.horizontal_angle_offset_deg:g},"
         f"{summary.attempted},{summary.detected},"
         f"{summary.detection_rate:.3f},{summary.within_half_degree},"
         f"{_fmt(summary.mae)},{_fmt(summary.p90_abs_error)},"
@@ -1042,6 +1096,8 @@ def recommended_start_kiosk_flags(params: ReplayParams, axis: str = "all") -> st
         flags.append(
             f"--experimental-kld7-vertical-impact-energy {params.impact_energy_threshold:g}"
         )
+        if params.vertical_angle_offset_deg:
+            flags.append(f"--kld7-angle-offset {params.vertical_angle_offset_deg:g}")
     if axis in {"all", "horizontal"}:
         flags.extend(
             [
@@ -1051,6 +1107,8 @@ def recommended_start_kiosk_flags(params: ReplayParams, axis: str = "all") -> st
                 f"--experimental-kld7-horizontal-angle-limit {params.horizontal_angle_limit_deg:g}",
             ]
         )
+        if params.horizontal_angle_offset_deg:
+            flags.append(f"--kld7-horizontal-offset {params.horizontal_angle_offset_deg:g}")
     return " \\\n  ".join(flags)
 
 
@@ -1145,13 +1203,54 @@ def main(argv: list[str] | None = None) -> int:
         default=0.75,
         help="For .pkl captures, seconds of RADC after each OPS shot (default: 0.75)",
     )
+    parser.add_argument(
+        "--jsonl-window-before",
+        type=float,
+        default=6.0,
+        help=(
+            "For JSONL kld7_buffer replay, seconds of RADC before shot_timestamp. "
+            "Default 6.0 mirrors server KLD7Tracker.buffer_seconds."
+        ),
+    )
+    parser.add_argument(
+        "--jsonl-window-after",
+        type=float,
+        default=0.75,
+        help=(
+            "For JSONL kld7_buffer replay, seconds of RADC after shot_timestamp. "
+            "Default 0.75 mirrors KLD7Tracker.shot_window_after_s."
+        ),
+    )
     parser.add_argument("--speed-tolerance", type=_parse_float_list, default=[10.0])
     parser.add_argument("--impact-energy", type=_parse_float_list, default=[3.0])
     parser.add_argument("--centroid-floor", type=_parse_float_list, default=[0.5])
     parser.add_argument("--ops-bin-tol", type=_parse_int_list, default=[25])
     parser.add_argument("--ops-bin-penalty", type=_parse_float_list, default=[10.0])
     parser.add_argument("--ops-anchored-min-snr", type=_parse_float_list, default=[5.0])
+    parser.add_argument(
+        "--require-ops-anchor",
+        action="store_true",
+        help=(
+            "Require a usable local peak near the OPS243-expected speed bin; "
+            "otherwise skip the frame instead of falling back to the strongest in-band peak"
+        ),
+    )
     parser.add_argument("--horizontal-angle-limit", type=_parse_float_list, default=[15.0])
+    parser.add_argument(
+        "--vertical-angle-offset",
+        type=float,
+        default=0.0,
+        help=(
+            "Vertical replay angle offset in degrees. Use 8.0 to mirror the "
+            "current start-kiosk --kld7 default."
+        ),
+    )
+    parser.add_argument(
+        "--horizontal-angle-offset",
+        type=float,
+        default=0.0,
+        help="Horizontal replay angle offset in degrees (default: 0.0)",
+    )
     parser.add_argument(
         "--top",
         type=int,
@@ -1251,6 +1350,8 @@ def main(argv: list[str] | None = None) -> int:
                 pickle_first_shot_number=first_shot_number,
                 pickle_buffer_seconds=args.pickle_buffer_seconds,
                 pickle_shot_window_after_s=args.pickle_shot_window_after,
+                jsonl_window_before_s=args.jsonl_window_before,
+                jsonl_window_after_s=args.jsonl_window_after,
             )
             for first_shot_number in first_shot_numbers
         }
@@ -1367,6 +1468,7 @@ def main(argv: list[str] | None = None) -> int:
         ops_bin_tol,
         ops_bin_penalty,
         ops_anchored_min_snr,
+        require_ops_anchor,
         horizontal_angle_limit,
     ) in itertools.product(
         first_shot_numbers,
@@ -1376,6 +1478,7 @@ def main(argv: list[str] | None = None) -> int:
         args.ops_bin_tol,
         args.ops_bin_penalty,
         args.ops_anchored_min_snr,
+        [args.require_ops_anchor],
         args.horizontal_angle_limit,
     ):
         buffers = buffers_by_first_shot[first_shot_number]
@@ -1386,7 +1489,10 @@ def main(argv: list[str] | None = None) -> int:
             ops_bin_outlier_tol=ops_bin_tol,
             ops_bin_outlier_penalty=ops_bin_penalty,
             ops_anchored_peak_min_snr=ops_anchored_min_snr,
+            require_ops_anchored_peak=require_ops_anchor,
             horizontal_angle_limit_deg=horizontal_angle_limit,
+            vertical_angle_offset_deg=args.vertical_angle_offset,
+            horizontal_angle_offset_deg=args.horizontal_angle_offset,
         )
         replay_targets = targets_by_first_shot[first_shot_number]
         rows = replay_all(replay_targets, buffers, params)

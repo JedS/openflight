@@ -749,11 +749,16 @@ class RollingBufferMonitor:
         spin_rpm = spin.spin_rpm if has_reportable_spin else None
         spin_confidence = spin.confidence if has_reportable_spin else None
         spin_result_quality = spin.quality if has_reportable_spin else None
+        impact_timestamp = (
+            processed.capture.first_byte_timestamp
+            if processed.capture is not None else None
+        )
 
         # Create shot with extended fields
         shot = Shot(
             ball_speed_mph=processed.ball_speed_mph,
             timestamp=datetime.now(),
+            impact_timestamp=impact_timestamp,
             club_speed_mph=processed.club_speed_mph,
             peak_magnitude=None,  # Not directly available in rolling buffer mode
             readings=[],  # Raw readings not stored (use ProcessedCapture instead)

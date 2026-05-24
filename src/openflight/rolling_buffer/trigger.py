@@ -800,11 +800,19 @@ class SoundTrigger(TriggerStrategy):
 
         response_len = len(response)
         logger.info("[TRIGGER] Sound trigger fired, %d bytes received", response_len)
+        first_byte_timestamp = getattr(
+            radar,
+            "last_hardware_trigger_first_byte_timestamp",
+            None,
+        )
 
         # Re-arm for next capture
         radar.rearm_rolling_buffer(self.pre_trigger_segments)
 
-        capture = processor.parse_capture(response)
+        capture = processor.parse_capture(
+            response,
+            first_byte_timestamp=first_byte_timestamp,
+        )
 
         if not capture:
             logger.warning("[TRIGGER] Sound trigger parse failed (%d bytes received)", response_len)

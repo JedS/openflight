@@ -205,7 +205,7 @@ class Shot:
         club_speed_mph: Peak club head speed detected (mph), if available
         smash_factor: Ratio of ball speed to club speed (typically 1.4-1.5 for driver)
         timestamp: When the shot was detected
-        impact_timestamp: Epoch timestamp of the peak ball reading from OPS243
+        impact_timestamp: Epoch timestamp aligned to impact/OPS trigger time
         peak_magnitude: Signal strength of strongest reading
         readings: All raw speed readings for this shot
         club: Club type for distance estimation

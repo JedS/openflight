@@ -367,7 +367,7 @@ class KLD7Tracker:
         Uses the OPS243-measured ball speed to narrow the FFT velocity
         search band, then extracts angle from F1A/F2A phase difference.
         """
-        from .radc import extract_launch_angle
+        from .radc import extract_launch_angle, select_best_shot_result
 
         frames, frames_available, frames_ignored_stale = self._radc_frames_for_extraction(
             shot_timestamp
@@ -418,7 +418,7 @@ class KLD7Tracker:
                 orientation=self.orientation,
             )
             if results:
-                best_attempt = results[0]
+                best_attempt = select_best_shot_result(results)
                 weak_horizontal_wall = (
                     self.orientation == "horizontal"
                     and attempt_idx == 0
@@ -454,7 +454,7 @@ class KLD7Tracker:
             )
             return None
 
-        best = dict(results[0])
+        best = dict(select_best_shot_result(results))
         if relaxed_retry:
             best["confidence"] = min(float(best.get("confidence", 0.0)), 0.45)
         logger.info(

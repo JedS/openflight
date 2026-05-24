@@ -390,6 +390,24 @@ class TestRollingBufferProcessor:
         assert capture.sample_time == 0.136
         assert capture.trigger_time == 0.0
 
+    def test_parse_capture_records_first_byte_timestamp(self, processor):
+        """Parser should preserve the host timestamp of the hardware trigger."""
+        i_samples = [2048] * 4096
+        q_samples = [2048] * 4096
+
+        import json
+        response = (
+            '{"sample_time": 0.136}\n'
+            '{"trigger_time": 0.0}\n'
+            f'{{"I": {json.dumps(i_samples)}}}\n'
+            f'{{"Q": {json.dumps(q_samples)}}}'
+        )
+
+        capture = processor.parse_capture(response, first_byte_timestamp=12345.678)
+
+        assert capture is not None
+        assert capture.first_byte_timestamp == pytest.approx(12345.678)
+
     def test_parse_capture_invalid_json(self, processor):
         """Parser should handle invalid JSON gracefully."""
         capture = processor.parse_capture("not valid json")
@@ -474,6 +492,78 @@ class TestTriggerFactory:
         """Factory should raise error for unknown trigger type."""
         with pytest.raises(ValueError):
             create_trigger("invalid_type")
+
+
+class TestSoundTriggerTimestampPropagation:
+    """Tests for hardware trigger timestamp propagation."""
+
+    def test_ops_hardware_trigger_records_first_byte_timestamp(self):
+        """OPS hardware wait should expose when the first serial byte arrived."""
+        from openflight.ops243 import OPS243Radar
+
+        class FakeSerial:
+            is_open = True
+
+            def __init__(self):
+                self._response = b'{"Q": [1]}'
+
+            @property
+            def in_waiting(self):
+                return len(self._response)
+
+            def reset_input_buffer(self):
+                pass
+
+            def read(self, byte_count):
+                chunk = self._response[:byte_count]
+                self._response = self._response[byte_count:]
+                return chunk
+
+        radar = OPS243Radar(port="/dev/null")
+        radar.serial = FakeSerial()
+
+        response = radar.wait_for_hardware_trigger(timeout=1.0)
+
+        assert response == '{"Q": [1]}'
+        assert radar.last_hardware_trigger_first_byte_timestamp is not None
+
+    def test_sound_trigger_passes_first_byte_timestamp_to_parser(self):
+        """Hardware-triggered captures should carry the first byte timestamp."""
+        from openflight.rolling_buffer.trigger import SoundTrigger
+
+        radar = MagicMock()
+        radar.wait_for_hardware_trigger.return_value = '{"sample_time": 0.0}'
+        radar.last_hardware_trigger_first_byte_timestamp = 12345.678
+
+        capture = IQCapture(
+            sample_time=0.0,
+            trigger_time=0.068,
+            i_samples=[2048] * 4096,
+            q_samples=[2048] * 4096,
+        )
+        processor = MagicMock()
+        processor.parse_capture.return_value = capture
+        processor.process_standard.return_value = SpeedTimeline(
+            readings=[
+                SpeedReading(
+                    speed_mph=100.0,
+                    magnitude=1000.0,
+                    timestamp_ms=68.0,
+                    direction="outbound",
+                )
+            ],
+            sample_rate_hz=937.5,
+        )
+
+        trigger = SoundTrigger(pre_trigger_segments=12)
+        result = trigger.wait_for_trigger(radar, processor, timeout=1.0)
+
+        assert result is capture
+        processor.parse_capture.assert_called_once_with(
+            '{"sample_time": 0.0}',
+            first_byte_timestamp=12345.678,
+        )
+        radar.rearm_rolling_buffer.assert_called_once_with(12)
 
 
 class TestPollingTrigger:
@@ -665,12 +755,20 @@ class TestRollingBufferMonitorSpinPlausibility:
     """Tests for club-aware filtering of spin artifacts."""
 
     def _processed_with_spin(self, spin: SpinResult) -> ProcessedCapture:
+        capture = IQCapture(
+            sample_time=0.0,
+            trigger_time=0.068,
+            i_samples=[2048] * 4096,
+            q_samples=[2048] * 4096,
+            first_byte_timestamp=12345.678,
+        )
         return ProcessedCapture(
             timeline=SpeedTimeline(readings=[], sample_rate_hz=937.5),
             ball_speed_mph=100.0,
             ball_timestamp_ms=60.0,
             club_speed_mph=75.0,
             spin=spin,
+            capture=capture,
         )
 
     def test_lower_rail_spin_withheld_for_high_spin_club(self):
@@ -696,6 +794,7 @@ class TestRollingBufferMonitorSpinPlausibility:
         assert shot.spin_snr == pytest.approx(12.99)
         assert shot.spin_rejection_reason is not None
         assert "plausibility floor" in shot.spin_rejection_reason
+        assert shot.impact_timestamp == pytest.approx(12345.678)
 
     def test_lower_rail_driver_spin_kept_diagnostic_only(self):
         """Rail picks should be logged but not exposed as measured spin."""

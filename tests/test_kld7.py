@@ -429,11 +429,20 @@ class TestRADCAngleExtraction:
             seen_timestamps.extend(frame["timestamp"] for frame in frames)
             return [
                 {
+                    "launch_angle_deg": 2.5,
+                    "ball_speed_mph": 80.0,
+                    "avg_snr_db": 8.0,
+                    "confidence": 0.8,
+                    "frame_count": 2,
+                    "impact_frames": [1],
+                },
+                {
                     "launch_angle_deg": 7.5,
                     "ball_speed_mph": 80.0,
                     "avg_snr_db": 8.0,
                     "confidence": 0.8,
                     "frame_count": 2,
+                    "impact_frames": [3],
                 }
             ]
 

@@ -24,12 +24,15 @@ class IQCapture:
         i_samples: 4096 in-phase samples (raw ADC values, 0-4095)
         q_samples: 4096 quadrature samples (raw ADC values, 0-4095)
         timestamp: Python timestamp when capture was received
+        first_byte_timestamp: Host epoch timestamp when the first byte of a
+            hardware-triggered capture arrived from the radar.
     """
     sample_time: float
     trigger_time: float
     i_samples: List[int]
     q_samples: List[int]
     timestamp: float = field(default_factory=lambda: datetime.now().timestamp())
+    first_byte_timestamp: Optional[float] = None
 
     @property
     def num_samples(self) -> int:

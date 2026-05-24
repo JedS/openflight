@@ -118,7 +118,11 @@ class RollingBufferProcessor:
         self.SAMPLE_RATE = sample_rate
         self.hanning_window = np.hanning(self.WINDOW_SIZE)
 
-    def parse_capture(self, response: str) -> Optional[IQCapture]:
+    def parse_capture(
+        self,
+        response: str,
+        first_byte_timestamp: Optional[float] = None,
+    ) -> Optional[IQCapture]:
         """
         Parse S! command response into IQCapture object.
 
@@ -130,6 +134,8 @@ class RollingBufferProcessor:
 
         Args:
             response: Raw response string from S! command
+            first_byte_timestamp: Host epoch timestamp when the first byte
+                arrived from a hardware-triggered rolling-buffer dump.
 
         Returns:
             IQCapture object or None if parsing fails
@@ -166,6 +172,7 @@ class RollingBufferProcessor:
                     trigger_time=trigger_time,
                     i_samples=i_samples,
                     q_samples=q_samples,
+                    first_byte_timestamp=first_byte_timestamp,
                 )
 
             # Log what's missing

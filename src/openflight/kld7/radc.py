@@ -991,6 +991,7 @@ def extract_launch_angle(
     ops_bin_outlier_penalty: float = 10.0,
     centroid_floor_frac: float = 0.5,
     ops_anchored_peak_min_snr: float = OPS_ANCHORED_PEAK_MIN_SNR,
+    require_ops_anchored_peak: bool = False,
     horizontal_angle_limit_deg: float = 15.0,
 ) -> list[dict]:
     """Extract vertical launch angle per shot from RADC frames.
@@ -1040,6 +1041,11 @@ def extract_launch_angle(
             OPS-expected local peak before using that frame. Default
             preserves production behavior; lower experimental replay
             values can admit weak near-OPS horizontal peaks.
+        require_ops_anchored_peak: When true, skip frames whose local peak near
+            the OPS243-expected ball-speed bin is missing or below
+            ops_anchored_peak_min_snr, instead of falling back to the strongest
+            in-band peak. This is useful for TrackMan replay sessions where
+            vertical fallback often latches onto clutter stripes.
         horizontal_angle_limit_deg: Symmetric horizontal bound in degrees
             used to reject obvious side-angle false positives. Default
             remains ±15° for production; experimental TrackMan replay can
@@ -1149,7 +1155,7 @@ def extract_launch_angle(
                 )
                 anchored_snr = peak_val / full_median if full_median > 0 else 0.0
                 if peak_bin is None or anchored_snr < ops_anchored_peak_min_snr:
-                    if orientation == "horizontal":
+                    if orientation == "horizontal" or require_ops_anchored_peak:
                         continue
                     peak_bin, peak_val, peak_band = _find_peak_in_bands(spec, tuple(ball_bands))
             else:
@@ -1357,3 +1363,15 @@ def extract_launch_angle(
         )
 
     return results
+
+
+def select_best_shot_result(results: list[dict]) -> dict:
+    """Select the candidate nearest the triggering OPS shot.
+
+    RADC extraction can return multiple chronological energy groups from the
+    before-heavy live ring buffer. The OPS-triggered shot is closest to the end
+    of that buffer, so prefer the candidate whose impact frames occur latest.
+    """
+    if not results:
+        raise ValueError("select_best_shot_result requires at least one result")
+    return max(results, key=lambda result: max(result.get("impact_frames") or [-1]))
