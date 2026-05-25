@@ -391,14 +391,14 @@ class TestRollingBufferProcessor:
         assert capture.trigger_time == 0.0
 
     def test_parse_capture_records_first_byte_timestamp(self, processor):
-        """Parser should preserve the host timestamp of the hardware trigger."""
+        """Parser should preserve first-byte time and infer trigger epoch."""
         i_samples = [2048] * 4096
         q_samples = [2048] * 4096
 
         import json
         response = (
-            '{"sample_time": 0.136}\n'
-            '{"trigger_time": 0.0}\n'
+            '{"sample_time": 100.0}\n'
+            '{"trigger_time": 100.068}\n'
             f'{{"I": {json.dumps(i_samples)}}}\n'
             f'{{"Q": {json.dumps(q_samples)}}}'
         )
@@ -407,6 +407,12 @@ class TestRollingBufferProcessor:
 
         assert capture is not None
         assert capture.first_byte_timestamp == pytest.approx(12345.678)
+        expected_post_trigger_s = (
+            capture.duration_ms - capture.trigger_offset_ms
+        ) / 1000.0
+        assert capture.trigger_timestamp == pytest.approx(
+            12345.678 - expected_post_trigger_s
+        )
 
     def test_parse_capture_invalid_json(self, processor):
         """Parser should handle invalid JSON gracefully."""
@@ -527,8 +533,8 @@ class TestSoundTriggerTimestampPropagation:
         assert response == '{"Q": [1]}'
         assert radar.last_hardware_trigger_first_byte_timestamp is not None
 
-    def test_sound_trigger_passes_first_byte_timestamp_to_parser(self):
-        """Hardware-triggered captures should carry the first byte timestamp."""
+    def test_sound_trigger_uses_buffer_offset_for_trigger_timestamp(self):
+        """Hardware captures should translate first-byte time back to trigger time."""
         from openflight.rolling_buffer.trigger import SoundTrigger
 
         radar = MagicMock()
@@ -536,8 +542,8 @@ class TestSoundTriggerTimestampPropagation:
         radar.last_hardware_trigger_first_byte_timestamp = 12345.678
 
         capture = IQCapture(
-            sample_time=0.0,
-            trigger_time=0.068,
+            sample_time=100.000,
+            trigger_time=100.068,
             i_samples=[2048] * 4096,
             q_samples=[2048] * 4096,
         )
@@ -559,6 +565,13 @@ class TestSoundTriggerTimestampPropagation:
         result = trigger.wait_for_trigger(radar, processor, timeout=1.0)
 
         assert result is capture
+        assert result.first_byte_timestamp == pytest.approx(12345.678)
+        expected_post_trigger_s = (
+            capture.duration_ms - capture.trigger_offset_ms
+        ) / 1000.0
+        assert result.trigger_timestamp == pytest.approx(
+            12345.678 - expected_post_trigger_s
+        )
         processor.parse_capture.assert_called_once_with(
             '{"sample_time": 0.0}',
             first_byte_timestamp=12345.678,
@@ -760,7 +773,8 @@ class TestRollingBufferMonitorSpinPlausibility:
             trigger_time=0.068,
             i_samples=[2048] * 4096,
             q_samples=[2048] * 4096,
-            first_byte_timestamp=12345.678,
+            first_byte_timestamp=12345.746,
+            trigger_timestamp=12345.678,
         )
         return ProcessedCapture(
             timeline=SpeedTimeline(readings=[], sample_rate_hz=937.5),

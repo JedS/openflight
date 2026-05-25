@@ -26,6 +26,8 @@ class IQCapture:
         timestamp: Python timestamp when capture was received
         first_byte_timestamp: Host epoch timestamp when the first byte of a
             hardware-triggered capture arrived from the radar.
+        trigger_timestamp: Host epoch timestamp when the hardware trigger fired,
+            derived from first_byte_timestamp and the post-trigger buffer span.
     """
     sample_time: float
     trigger_time: float
@@ -33,6 +35,12 @@ class IQCapture:
     q_samples: List[int]
     timestamp: float = field(default_factory=lambda: datetime.now().timestamp())
     first_byte_timestamp: Optional[float] = None
+    trigger_timestamp: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Infer the hardware trigger epoch when first-byte timing is available."""
+        if self.trigger_timestamp is None:
+            self.apply_trigger_timestamp_from_first_byte()
 
     @property
     def num_samples(self) -> int:
@@ -48,6 +56,27 @@ class IQCapture:
     def trigger_offset_ms(self) -> float:
         """Time offset of trigger from start of buffer in milliseconds."""
         return (self.trigger_time - self.sample_time) * 1000
+
+    @property
+    def post_trigger_duration_ms(self) -> float:
+        """Duration of capture sampled after the hardware trigger."""
+        return min(
+            max(self.duration_ms - self.trigger_offset_ms, 0.0),
+            self.duration_ms,
+        )
+
+    def infer_trigger_timestamp_from_first_byte(self) -> Optional[float]:
+        """Return hardware trigger epoch inferred from first response byte time."""
+        if self.first_byte_timestamp is None:
+            return None
+        return self.first_byte_timestamp - self.post_trigger_duration_ms / 1000.0
+
+    def apply_trigger_timestamp_from_first_byte(self) -> Optional[float]:
+        """Set trigger_timestamp from first_byte_timestamp when possible."""
+        inferred = self.infer_trigger_timestamp_from_first_byte()
+        if inferred is not None:
+            self.trigger_timestamp = inferred
+        return inferred
 
 
 @dataclass

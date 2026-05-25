@@ -823,6 +823,21 @@ class SoundTrigger(TriggerStrategy):
             )
             return None
 
+        if first_byte_timestamp is not None and capture.first_byte_timestamp is None:
+            capture.first_byte_timestamp = float(first_byte_timestamp)
+
+        if capture.first_byte_timestamp is not None and capture.trigger_timestamp is None:
+            capture.apply_trigger_timestamp_from_first_byte()
+
+        if capture.trigger_timestamp is not None and capture.first_byte_timestamp is not None:
+            logger.info(
+                "[TRIGGER] Sound trigger wall time %.3f "
+                "(first byte %.3f, post-trigger %.1fms)",
+                capture.trigger_timestamp,
+                capture.first_byte_timestamp,
+                capture.post_trigger_duration_ms,
+            )
+
         # Quick validation: does the capture contain any real swing data?
         # At a driving range, a nearby player's impact sound can trip the
         # trigger even though nothing was moving in front of our radar.

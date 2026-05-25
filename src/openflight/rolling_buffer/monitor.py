@@ -749,10 +749,13 @@ class RollingBufferMonitor:
         spin_rpm = spin.spin_rpm if has_reportable_spin else None
         spin_confidence = spin.confidence if has_reportable_spin else None
         spin_result_quality = spin.quality if has_reportable_spin else None
-        impact_timestamp = (
-            processed.capture.first_byte_timestamp
-            if processed.capture is not None else None
-        )
+        impact_timestamp = None
+        if processed.capture is not None:
+            impact_timestamp = (
+                processed.capture.trigger_timestamp
+                if processed.capture.trigger_timestamp is not None
+                else processed.capture.first_byte_timestamp
+            )
 
         # Create shot with extended fields
         shot = Shot(
