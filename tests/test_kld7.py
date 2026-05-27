@@ -260,6 +260,7 @@ class TestKLD7TrackerRingBuffer:
         tracker.buffer_seconds = 2.0
         tracker.max_buffer_frames = 70
         tracker.radc_stream_min_interval_s = 0.05
+        tracker.radc_stream_phase_offset_s = 0.025 if orientation == "horizontal" else 0.0
         tracker._init_ring_buffer()
         return tracker
 
@@ -335,6 +336,8 @@ class TestKLD7TrackerRingBuffer:
 
         assert vertical.radc_stream_min_interval_s == pytest.approx(0.05)
         assert horizontal.radc_stream_min_interval_s == pytest.approx(0.05)
+        assert vertical.radc_stream_phase_offset_s == pytest.approx(0.0)
+        assert horizontal.radc_stream_phase_offset_s == pytest.approx(0.025)
 
     def test_connect_fails_fast_when_explicit_dev_symlink_is_missing(self, monkeypatch, caplog):
         """Missing /dev/kld7_* aliases should not retry GBYE against a nonexistent path."""
@@ -542,6 +545,33 @@ class TestKLD7TrackerRingBuffer:
         tracker._stream_loop()
 
         assert radar.min_frame_interval == pytest.approx(0.05)
+
+    def test_stream_loop_staggers_horizontal_radc_requests(self, monkeypatch):
+        """Horizontal RADC requests should be phase-shifted from vertical requests."""
+        fake_kld7 = ModuleType("kld7")
+        fake_kld7.FrameCode = SimpleNamespace(RADC="RADC")
+
+        class FakeKLD7Exception(Exception):
+            pass
+
+        fake_kld7.KLD7Exception = FakeKLD7Exception
+        monkeypatch.setitem(sys.modules, "kld7", fake_kld7)
+
+        tracker = self._make_tracker(orientation="horizontal")
+        tracker._running = True
+        sleeps = []
+
+        class FakeRadar:
+            def stream_frames(self, frame_codes, max_count=-1, min_frame_interval=None):
+                yield ("RADC", b"\x7f" * 3072)
+                tracker._running = False
+
+        tracker._radar = FakeRadar()
+        monkeypatch.setattr("openflight.kld7.tracker.time.sleep", sleeps.append)
+
+        tracker._stream_loop()
+
+        assert sleeps[0] == pytest.approx(0.025)
 
     def test_stream_loop_reconnects_after_consecutive_timeouts(self, monkeypatch):
         """Repeated command timeouts should trigger a full K-LD7 reconnect."""
