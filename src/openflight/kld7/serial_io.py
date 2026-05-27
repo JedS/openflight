@@ -67,8 +67,11 @@ def install_robust_read_packet(radar: Any) -> None:
             raise KLD7Exception("Timeout waiting for reply")
         if len(header) != 8:
             raise KLD7Exception(f"Short header read: got {len(header)} of 8 bytes")
-        reply, length = struct.unpack("<4sI", header)
-        reply = reply.decode("ASCII")
+        raw_reply, length = struct.unpack("<4sI", header)
+        try:
+            reply = raw_reply.decode("ASCII")
+        except UnicodeDecodeError as e:
+            raise KLD7Exception(f"Invalid packet header: {raw_reply!r}") from e
         if length != 0:
             payload = _read_exact(device, length)
             if len(payload) != length:
@@ -78,6 +81,29 @@ def install_robust_read_packet(radar: Any) -> None:
         return reply, payload
 
     radar._read_packet = lambda: _robust_read_packet(radar)
+
+
+def _install_safe_kld7_destructor(kld7_cls: Any) -> None:
+    """Patch kld7.KLD7.__del__ so serial close failures do not print tracebacks."""
+    if getattr(kld7_cls, "_openflight_safe_del_installed", False):
+        return
+
+    original_del = getattr(kld7_cls, "__del__", None)
+
+    def _safe_del(self: Any) -> None:
+        try:
+            if original_del is not None:
+                original_del(self)
+            elif hasattr(self, "close"):
+                self.close()
+        except Exception:
+            try:
+                self._port = None
+            except Exception:
+                pass
+
+    kld7_cls.__del__ = _safe_del
+    kld7_cls._openflight_safe_del_installed = True
 
 
 # Binary GBYE packet: 4-byte command + 4-byte length (0).
@@ -145,6 +171,8 @@ def connect_with_recovery(
             all attempts fail.
     """
     from kld7 import KLD7  # type: ignore[import-not-found]
+
+    _install_safe_kld7_destructor(KLD7)
 
     last_err: Optional[BaseException] = None
     for attempt in range(1, max_attempts + 1):

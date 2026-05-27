@@ -46,6 +46,47 @@ class TestKLD7SerialIO:
         with pytest.raises(FakeKLD7Exception, match="Serial read failed"):
             radar._read_packet()
 
+    def test_robust_read_packet_wraps_non_ascii_headers(self, monkeypatch):
+        fake_kld7 = ModuleType("kld7")
+
+        class FakeKLD7Exception(Exception):
+            pass
+
+        fake_kld7.KLD7Exception = FakeKLD7Exception
+        monkeypatch.setitem(sys.modules, "kld7", fake_kld7)
+
+        from openflight.kld7.serial_io import install_robust_read_packet
+
+        class GarbledPort:
+            def read(self, _size):
+                return b"\x83ABC\x00\x00\x00\x00"
+
+        radar = SimpleNamespace(_port=GarbledPort())
+        install_robust_read_packet(radar)
+
+        with pytest.raises(FakeKLD7Exception, match="Invalid packet header"):
+            radar._read_packet()
+
+    def test_safe_kld7_destructor_suppresses_close_failures(self):
+        from openflight.kld7.serial_io import _install_safe_kld7_destructor
+
+        class FakeKLD7:
+            def __init__(self):
+                self._port = object()
+
+            def __del__(self):
+                self.close()
+
+            def close(self):
+                raise RuntimeError("serial port already failed")
+
+        _install_safe_kld7_destructor(FakeKLD7)
+        radar = FakeKLD7()
+
+        radar.__del__()
+
+        assert radar._port is None
+
 
 class TestKLD7Types:
     """Tests for K-LD7 data types."""
