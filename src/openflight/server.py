@@ -93,6 +93,47 @@ ball_detected: bool = False
 ball_detection_confidence: float = 0.0
 latest_frame: Optional[bytes] = None
 frame_lock = threading.Lock()
+shutdown_lock = threading.Lock()
+shutdown_cleanup_started = False
+
+
+def _run_shutdown_step(name: str, callback) -> None:
+    """Run one shutdown step without preventing later hardware cleanup."""
+    try:
+        callback()
+    except Exception:
+        logger.warning("[SERVER] Shutdown cleanup failed during %s", name, exc_info=True)
+
+
+def _cleanup_hardware_for_shutdown() -> None:
+    """Stop hardware resources in an order that leaves serial devices reusable."""
+    global shutdown_cleanup_started  # pylint: disable=global-statement
+
+    with shutdown_lock:
+        if shutdown_cleanup_started:
+            logger.info("[SERVER] Shutdown cleanup already started")
+            return
+        shutdown_cleanup_started = True
+
+    if kld7_vertical:
+        _run_shutdown_step("K-LD7 vertical stop", kld7_vertical.stop)
+    if kld7_horizontal:
+        _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
+
+    _run_shutdown_step("camera thread stop", stop_camera_thread)
+    if camera:
+        _run_shutdown_step("camera stop", camera.stop)
+        _run_shutdown_step("camera close", camera.close)
+
+    _run_shutdown_step("launch monitor stop", stop_monitor)
+
+
+def _shutdown_process_after_delay(delay_s: float = 0.5) -> None:
+    """Give the HTTP/WebSocket response time to flush, then clean up and exit."""
+    time.sleep(delay_s)
+    _cleanup_hardware_for_shutdown()
+    logger.info("[SERVER] Goodbye")
+    os._exit(0)
 
 
 # Baseline launch angles by club (TrackMan data)
@@ -859,27 +900,7 @@ def static_files(path):
 def api_shutdown():
     """Cleanly shut down the server via REST API."""
     logger.info("[SERVER] Shutdown requested via REST API")
-
-    import threading
-
-    def _shutdown():
-        import os
-        import time as _time
-
-        _time.sleep(0.5)
-        # Clean up before exit
-        try:
-            if kld7_vertical:
-                kld7_vertical.stop()
-            if kld7_horizontal:
-                kld7_horizontal.stop()
-            stop_monitor()
-        except Exception:
-            pass
-        logger.info("[SERVER] Goodbye")
-        os._exit(0)
-
-    threading.Thread(target=_shutdown, daemon=True).start()
+    threading.Thread(target=_shutdown_process_after_delay, daemon=True).start()
     return {"status": "shutting_down"}, 200
 
 
@@ -1489,26 +1510,7 @@ def handle_shutdown():
     """Cleanly shut down the server and all hardware."""
     logger.info("[SERVER] Shutdown requested from UI (WebSocket)")
     socketio.emit("shutdown_ack", {"message": "Shutting down..."})
-
-    import threading
-
-    def _shutdown():
-        import os
-        import time as _time
-
-        _time.sleep(0.5)
-        try:
-            if kld7_vertical:
-                kld7_vertical.stop()
-            if kld7_horizontal:
-                kld7_horizontal.stop()
-            stop_monitor()
-        except Exception:
-            pass
-        logger.info("[SERVER] Goodbye")
-        os._exit(0)
-
-    threading.Thread(target=_shutdown, daemon=True).start()
+    threading.Thread(target=_shutdown_process_after_delay, daemon=True).start()
 
 
 def on_shot_detected(shot: Shot):
@@ -2586,15 +2588,7 @@ def main():
             app, host=args.host, port=args.web_port, debug=False, allow_unsafe_werkzeug=True
         )
     finally:
-        if kld7_vertical:
-            kld7_vertical.stop()
-        if kld7_horizontal:
-            kld7_horizontal.stop()
-        stop_camera_thread()
-        if camera:
-            camera.stop()
-            camera.close()
-        stop_monitor()
+        _cleanup_hardware_for_shutdown()
 
 
 if __name__ == "__main__":

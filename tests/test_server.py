@@ -20,6 +20,57 @@ from openflight.server import (
 )
 
 
+class TestShutdownCleanup:
+    """Tests for UI/server shutdown hardware cleanup."""
+
+    def test_shutdown_cleanup_continues_if_kld7_stop_fails(self, monkeypatch):
+        """One hardware cleanup failure must not skip OPS rolling-buffer cleanup."""
+        calls = []
+
+        class FailingKLD7:
+            def stop(self):
+                calls.append("kld7_vertical.stop")
+                raise RuntimeError("stale kld7 stream")
+
+        class GoodKLD7:
+            def stop(self):
+                calls.append("kld7_horizontal.stop")
+
+        monkeypatch.setattr(server_module, "kld7_vertical", FailingKLD7())
+        monkeypatch.setattr(server_module, "kld7_horizontal", GoodKLD7())
+        monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
+        monkeypatch.setattr(
+            server_module, "stop_camera_thread", lambda: calls.append("camera_thread")
+        )
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("stop_monitor"))
+
+        server_module._cleanup_hardware_for_shutdown()
+
+        assert calls == [
+            "kld7_vertical.stop",
+            "kld7_horizontal.stop",
+            "camera_thread",
+            "stop_monitor",
+        ]
+
+    def test_shutdown_cleanup_is_idempotent(self, monkeypatch):
+        """Duplicate shutdown requests must not stop hardware twice."""
+        calls = []
+
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
+        monkeypatch.setattr(server_module, "stop_camera_thread", lambda: calls.append("camera"))
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("monitor"))
+
+        server_module._cleanup_hardware_for_shutdown()
+        server_module._cleanup_hardware_for_shutdown()
+
+        assert calls == ["camera", "monitor"]
+
+
 class TestKLD7Initialization:
     """Tests for K-LD7 startup wiring."""
 
