@@ -17,9 +17,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_VERTICAL_RADC_STREAM_MIN_INTERVAL_S = 0.05
 _DEFAULT_HORIZONTAL_RADC_STREAM_MIN_INTERVAL_S = 0.05
-_DEFAULT_HORIZONTAL_RADC_STREAM_PHASE_OFFSET_S = 0.025
-_ACTIVE_KLD7_PORTS: dict[str, tuple[str, int]] = {}
-_ACTIVE_KLD7_PORTS_LOCK = threading.Lock()
 
 
 def _is_recoverable_stream_error(error: BaseException) -> bool:
@@ -72,13 +69,6 @@ def _default_radc_stream_min_interval_s(orientation: str) -> float:
     return _DEFAULT_VERTICAL_RADC_STREAM_MIN_INTERVAL_S
 
 
-def _default_radc_stream_phase_offset_s(orientation: str) -> float:
-    """Return the default RADC polling phase offset for a K-LD7 orientation."""
-    if orientation == "horizontal":
-        return _DEFAULT_HORIZONTAL_RADC_STREAM_PHASE_OFFSET_S
-    return 0.0
-
-
 def _resolved_serial_port(port: str) -> str:
     """Resolve aliases like /dev/kld7_horizontal to the underlying serial device."""
     try:
@@ -111,7 +101,6 @@ class KLD7Tracker:
     radc_horizontal_retry_impact_energy_threshold = 0.5
     radc_horizontal_angle_limit_deg = 15.0
     radc_stream_min_interval_s = _DEFAULT_VERTICAL_RADC_STREAM_MIN_INTERVAL_S
-    radc_stream_phase_offset_s = 0.0
 
     def __init__(
         self,
@@ -132,7 +121,6 @@ class KLD7Tracker:
         radc_horizontal_retry_impact_energy_threshold: float = 0.5,
         radc_horizontal_angle_limit_deg: float = 15.0,
         radc_stream_min_interval_s: Optional[float] = None,
-        radc_stream_phase_offset_s: Optional[float] = None,
     ):
         self.port = port
         self.range_m = range_m
@@ -157,17 +145,11 @@ class KLD7Tracker:
             if radc_stream_min_interval_s is None
             else radc_stream_min_interval_s
         )
-        self.radc_stream_phase_offset_s = (
-            _default_radc_stream_phase_offset_s(orientation)
-            if radc_stream_phase_offset_s is None
-            else radc_stream_phase_offset_s
-        )
         self.max_buffer_frames = int(34 * buffer_seconds)
 
         self._radar = None
         self._stream_thread: Optional[threading.Thread] = None
         self._running = False
-        self._resolved_port: Optional[str] = None
         self._init_ring_buffer()
 
     def _init_ring_buffer(self):
@@ -195,17 +177,6 @@ class KLD7Tracker:
             )
             return False
         resolved_port = _resolved_serial_port(str(port))
-        with _ACTIVE_KLD7_PORTS_LOCK:
-            active = _ACTIVE_KLD7_PORTS.get(resolved_port)
-            if active and active[1] != id(self):
-                logger.error(
-                    "[KLD7] Configured K-LD7 port %s resolves to %s, already in use by %s. "
-                    "Check /dev/kld7_vertical and /dev/kld7_horizontal udev aliases.",
-                    port,
-                    resolved_port,
-                    active[0],
-                )
-                return False
 
         # The kld7 library always opens at 115200, sends INIT to negotiate
         # up to 3Mbaud, then switches. If a prior session left the K-LD7 at
@@ -229,9 +200,6 @@ class KLD7Tracker:
 
         self._configure_for_golf()
         self.port = str(port)
-        self._resolved_port = resolved_port
-        with _ACTIVE_KLD7_PORTS_LOCK:
-            _ACTIVE_KLD7_PORTS[resolved_port] = (self.orientation, id(self))
         logger.info(
             "[KLD7] Ready: port=%s (resolved=%s), baud=%s, range=%dm, speed=%dkm/h, orientation=%s",
             port,
@@ -303,13 +271,6 @@ class KLD7Tracker:
             self._radar._port = None
         except Exception:
             pass
-        resolved_port = getattr(self, "_resolved_port", None)
-        if resolved_port is not None:
-            with _ACTIVE_KLD7_PORTS_LOCK:
-                active = _ACTIVE_KLD7_PORTS.get(resolved_port)
-                if active and active[1] == id(self):
-                    del _ACTIVE_KLD7_PORTS[resolved_port]
-            self._resolved_port = None
         self._radar = None
 
     def _drain_after_stream_error(self) -> None:
@@ -369,13 +330,10 @@ class KLD7Tracker:
         last_health_count = 0
 
         logger.info(
-            "[KLD7] Stream started: RADC only (3Mbaud, %.1f Hz target, %.3fs phase, %s)",
+            "[KLD7] Stream started: RADC only (3Mbaud, %.1f Hz target, %s)",
             1.0 / max(self.radc_stream_min_interval_s, 0.001),
-            self.radc_stream_phase_offset_s,
             self.orientation,
         )
-        if self.radc_stream_phase_offset_s > 0:
-            time.sleep(self.radc_stream_phase_offset_s)
 
         # Note: the robust _read_packet patch is applied during connect()
         # via serial_io.connect_with_recovery, so we don't need to

@@ -260,7 +260,6 @@ class TestKLD7TrackerRingBuffer:
         tracker.buffer_seconds = 2.0
         tracker.max_buffer_frames = 70
         tracker.radc_stream_min_interval_s = 0.05
-        tracker.radc_stream_phase_offset_s = 0.025 if orientation == "horizontal" else 0.0
         tracker._init_ring_buffer()
         return tracker
 
@@ -336,18 +335,13 @@ class TestKLD7TrackerRingBuffer:
 
         assert vertical.radc_stream_min_interval_s == pytest.approx(0.05)
         assert horizontal.radc_stream_min_interval_s == pytest.approx(0.05)
-        assert vertical.radc_stream_phase_offset_s == pytest.approx(0.0)
-        assert horizontal.radc_stream_phase_offset_s == pytest.approx(0.025)
 
     def test_connect_fails_fast_when_explicit_dev_symlink_is_missing(self, monkeypatch, caplog):
         """Missing /dev/kld7_* aliases should not retry GBYE against a nonexistent path."""
         import logging
 
-        from openflight.kld7 import tracker as tracker_module
-
         tracker = KLD7Tracker(port="/dev/kld7_vertical", orientation="vertical")
         connect_with_recovery = Mock()
-        tracker_module._ACTIVE_KLD7_PORTS.clear()
         monkeypatch.setattr(
             "openflight.kld7.tracker.find_spec",
             lambda name: object() if name == "kld7" else None,
@@ -372,46 +366,6 @@ class TestKLD7TrackerRingBuffer:
         connect_with_recovery.assert_not_called()
         assert "Configured K-LD7 port does not exist: /dev/kld7_vertical" in caplog.text
         assert "/dev/ttyUSB0" in caplog.text
-
-    def test_connect_rejects_duplicate_resolved_kld7_ports(self, monkeypatch, caplog):
-        """Vertical and horizontal aliases must not point at the same serial device."""
-        import logging
-
-        from openflight.kld7 import tracker as tracker_module
-
-        fake_radar = SimpleNamespace(
-            _port=SimpleNamespace(baudrate=3000000), params=SimpleNamespace()
-        )
-        connect_with_recovery = Mock(return_value=fake_radar)
-        tracker_module._ACTIVE_KLD7_PORTS.clear()
-
-        monkeypatch.setattr(
-            "openflight.kld7.tracker.find_spec",
-            lambda name: object() if name == "kld7" else None,
-        )
-        monkeypatch.setattr("openflight.kld7.tracker.Path.exists", lambda _path: True)
-        monkeypatch.setattr(
-            "openflight.kld7.tracker.Path.resolve",
-            lambda path, strict=False: Path("/dev/ttyUSB0"),
-        )
-        monkeypatch.setattr(
-            "openflight.kld7.serial_io.connect_with_recovery",
-            connect_with_recovery,
-        )
-        monkeypatch.setattr(KLD7Tracker, "_configure_for_golf", lambda self: None)
-
-        vertical = KLD7Tracker(port="/dev/kld7_vertical", orientation="vertical")
-        horizontal = KLD7Tracker(port="/dev/kld7_horizontal", orientation="horizontal")
-
-        assert vertical.connect() is True
-        with caplog.at_level(logging.ERROR, logger="openflight.kld7.tracker"):
-            assert horizontal.connect() is False
-
-        assert connect_with_recovery.call_count == 1
-        assert "already in use by vertical" in caplog.text
-
-        vertical.stop()
-        tracker_module._ACTIVE_KLD7_PORTS.clear()
 
     def test_stream_loop_recovers_from_serial_no_data_error(self, monkeypatch):
         """A transient serial read failure should not kill the K-LD7 stream."""
@@ -545,33 +499,6 @@ class TestKLD7TrackerRingBuffer:
         tracker._stream_loop()
 
         assert radar.min_frame_interval == pytest.approx(0.05)
-
-    def test_stream_loop_staggers_horizontal_radc_requests(self, monkeypatch):
-        """Horizontal RADC requests should be phase-shifted from vertical requests."""
-        fake_kld7 = ModuleType("kld7")
-        fake_kld7.FrameCode = SimpleNamespace(RADC="RADC")
-
-        class FakeKLD7Exception(Exception):
-            pass
-
-        fake_kld7.KLD7Exception = FakeKLD7Exception
-        monkeypatch.setitem(sys.modules, "kld7", fake_kld7)
-
-        tracker = self._make_tracker(orientation="horizontal")
-        tracker._running = True
-        sleeps = []
-
-        class FakeRadar:
-            def stream_frames(self, frame_codes, max_count=-1, min_frame_interval=None):
-                yield ("RADC", b"\x7f" * 3072)
-                tracker._running = False
-
-        tracker._radar = FakeRadar()
-        monkeypatch.setattr("openflight.kld7.tracker.time.sleep", sleeps.append)
-
-        tracker._stream_loop()
-
-        assert sleeps[0] == pytest.approx(0.025)
 
     def test_stream_loop_reconnects_after_consecutive_timeouts(self, monkeypatch):
         """Repeated command timeouts should trigger a full K-LD7 reconnect."""
