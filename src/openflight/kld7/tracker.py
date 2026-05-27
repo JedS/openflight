@@ -15,6 +15,9 @@ from .types import KLD7Angle, KLD7Frame
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_VERTICAL_RADC_STREAM_MIN_INTERVAL_S = 0.05
+_DEFAULT_HORIZONTAL_RADC_STREAM_MIN_INTERVAL_S = 0.10
+
 
 def _is_recoverable_stream_error(error: BaseException) -> bool:
     """Return True for transient serial failures seen during live K-LD7 streaming."""
@@ -59,6 +62,13 @@ def _available_serial_device_summary() -> str:
     return ", ".join(candidates)
 
 
+def _default_radc_stream_min_interval_s(orientation: str) -> float:
+    """Return the default RADC polling interval for a K-LD7 orientation."""
+    if orientation == "horizontal":
+        return _DEFAULT_HORIZONTAL_RADC_STREAM_MIN_INTERVAL_S
+    return _DEFAULT_VERTICAL_RADC_STREAM_MIN_INTERVAL_S
+
+
 class KLD7Tracker:
     """
     K-LD7 angle radar tracker.
@@ -82,7 +92,7 @@ class KLD7Tracker:
     radc_horizontal_impact_energy_threshold = 1.85
     radc_horizontal_retry_impact_energy_threshold = 0.5
     radc_horizontal_angle_limit_deg = 15.0
-    radc_stream_min_interval_s = 0.05
+    radc_stream_min_interval_s = _DEFAULT_VERTICAL_RADC_STREAM_MIN_INTERVAL_S
 
     def __init__(
         self,
@@ -102,7 +112,7 @@ class KLD7Tracker:
         radc_horizontal_impact_energy_threshold: float = 1.85,
         radc_horizontal_retry_impact_energy_threshold: float = 0.5,
         radc_horizontal_angle_limit_deg: float = 15.0,
-        radc_stream_min_interval_s: float = 0.05,
+        radc_stream_min_interval_s: Optional[float] = None,
     ):
         self.port = port
         self.range_m = range_m
@@ -122,7 +132,11 @@ class KLD7Tracker:
             radc_horizontal_retry_impact_energy_threshold
         )
         self.radc_horizontal_angle_limit_deg = radc_horizontal_angle_limit_deg
-        self.radc_stream_min_interval_s = radc_stream_min_interval_s
+        self.radc_stream_min_interval_s = (
+            _default_radc_stream_min_interval_s(orientation)
+            if radc_stream_min_interval_s is None
+            else radc_stream_min_interval_s
+        )
         self.max_buffer_frames = int(34 * buffer_seconds)
 
         self._radar = None

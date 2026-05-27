@@ -186,6 +186,7 @@ class TestKLD7TrackerRingBuffer:
         tracker.orientation = orientation
         tracker.buffer_seconds = 2.0
         tracker.max_buffer_frames = 70
+        tracker.radc_stream_min_interval_s = 0.10 if orientation == "horizontal" else 0.05
         tracker._init_ring_buffer()
         return tracker
 
@@ -254,6 +255,13 @@ class TestKLD7TrackerRingBuffer:
         for i in range(5):
             tracker._add_frame(KLD7Frame(timestamp=now + i * 0.03))
         assert tracker.get_angle_for_shot() is None
+
+    def test_radc_stream_rate_defaults_by_orientation(self):
+        vertical = KLD7Tracker(orientation="vertical")
+        horizontal = KLD7Tracker(orientation="horizontal")
+
+        assert vertical.radc_stream_min_interval_s == pytest.approx(0.05)
+        assert horizontal.radc_stream_min_interval_s == pytest.approx(0.10)
 
     def test_connect_fails_fast_when_explicit_dev_symlink_is_missing(self, monkeypatch, caplog):
         """Missing /dev/kld7_* aliases should not retry GBYE against a nonexistent path."""
@@ -417,7 +425,7 @@ class TestKLD7TrackerRingBuffer:
 
         tracker._stream_loop()
 
-        assert radar.min_frame_interval == pytest.approx(0.05)
+        assert radar.min_frame_interval == pytest.approx(0.10)
 
     def test_stream_loop_reconnects_after_consecutive_timeouts(self, monkeypatch):
         """Repeated command timeouts should trigger a full K-LD7 reconnect."""
