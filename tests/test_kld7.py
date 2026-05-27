@@ -91,6 +91,43 @@ class TestKLD7SerialIO:
         with pytest.raises(FakeKLD7Exception, match="Invalid packet length"):
             radar._read_packet()
 
+    def test_robust_read_packet_waits_for_trailing_payload_bytes(self, monkeypatch):
+        fake_kld7 = ModuleType("kld7")
+
+        class FakeKLD7Exception(Exception):
+            pass
+
+        fake_kld7.KLD7Exception = FakeKLD7Exception
+        monkeypatch.setitem(sys.modules, "kld7", fake_kld7)
+
+        from openflight.kld7.serial_io import install_robust_read_packet
+
+        class DelayedTailPort:
+            def __init__(self):
+                self.timeout = 0.5
+                self.reads = []
+
+            def read(self, size):
+                self.reads.append((size, self.timeout))
+                if len(self.reads) == 1:
+                    return b"RADC" + (3072).to_bytes(4, "little")
+                if len(self.reads) == 2:
+                    return b"\x01" * 3071
+                if len(self.reads) == 3:
+                    return b""
+                return b"\x02"
+
+        port = DelayedTailPort()
+        radar = SimpleNamespace(_port=port)
+        install_robust_read_packet(radar)
+
+        reply, payload = radar._read_packet()
+
+        assert reply == "RADC"
+        assert payload == b"\x01" * 3071 + b"\x02"
+        assert port.timeout == 0.5
+        assert any(timeout < 0.5 for _, timeout in port.reads)
+
     def test_safe_kld7_destructor_suppresses_close_failures(self):
         from openflight.kld7.serial_io import _install_safe_kld7_destructor
 

@@ -28,6 +28,8 @@ import time
 from typing import Any, Optional
 
 _MAX_PACKET_PAYLOAD_BYTES = 8192
+_PARTIAL_READ_GRACE_SECONDS = 0.08
+_PARTIAL_READ_RETRY_TIMEOUT_SECONDS = 0.01
 
 
 def install_robust_read_packet(radar: Any) -> None:
@@ -47,16 +49,36 @@ def install_robust_read_packet(radar: Any) -> None:
         """
         buf = b""
         remaining = n
-        while remaining > 0:
-            try:
-                chunk = device._port.read(remaining)
-            except Exception as e:
-                raise KLD7Exception(f"Serial read failed: {e}") from e
-            if not chunk:
-                break
-            buf += chunk
-            remaining -= len(chunk)
-        return buf
+        partial_deadline: Optional[float] = None
+        port = device._port
+        original_timeout = getattr(port, "timeout", None)
+        using_retry_timeout = False
+        try:
+            while remaining > 0:
+                try:
+                    chunk = port.read(remaining)
+                except Exception as e:
+                    raise KLD7Exception(f"Serial read failed: {e}") from e
+                if not chunk:
+                    if not buf:
+                        break
+                    now = time.monotonic()
+                    if partial_deadline is None:
+                        partial_deadline = now + _PARTIAL_READ_GRACE_SECONDS
+                    if now >= partial_deadline:
+                        break
+                    if original_timeout is not None and not using_retry_timeout:
+                        port.timeout = min(original_timeout, _PARTIAL_READ_RETRY_TIMEOUT_SECONDS)
+                        using_retry_timeout = True
+                    time.sleep(0.002)
+                    continue
+                buf += chunk
+                remaining -= len(chunk)
+                partial_deadline = None
+            return buf
+        finally:
+            if using_retry_timeout:
+                port.timeout = original_timeout
 
     def _robust_read_packet(device: Any):
         if device._port is None:
