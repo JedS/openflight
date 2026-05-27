@@ -207,17 +207,46 @@ class KLD7Tracker:
         if self._stream_thread:
             self._stream_thread.join(timeout=5)
             self._stream_thread = None
-        if self._radar:
-            try:
-                self._radar.close()
-            except Exception:
-                pass
-            try:
-                self._radar._port = None
-            except Exception:
-                pass
-            self._radar = None
+        self._close_radar_safely()
         logger.info("[KLD7] Stopped")
+
+    def _close_radar_safely(self):
+        """Best-effort close that prevents the kld7 destructor from retrying a bad port."""
+        if not self._radar:
+            return
+        try:
+            self._radar.close()
+        except Exception:
+            pass
+        try:
+            self._radar._port = None
+        except Exception:
+            pass
+        self._radar = None
+
+    def _drain_after_stream_error(self) -> None:
+        """Best-effort serial drain after a recoverable stream error."""
+        try:
+            self._radar._drain_serial()
+        except Exception:
+            pass
+        time.sleep(0.1)
+
+    def _reconnect_after_stream_errors(self, errors: int) -> bool:
+        """Reconnect a K-LD7 whose stream is stuck in repeated command timeouts."""
+        logger.warning(
+            "[KLD7] Stream hit %d consecutive errors (%s); reconnecting",
+            errors,
+            self.orientation,
+        )
+        self._close_radar_safely()
+        if not self._running:
+            return False
+        try:
+            return self.connect()
+        except Exception:
+            logger.error("[KLD7] Stream reconnect failed (%s)", self.orientation, exc_info=True)
+            return False
 
     def _stream_loop(self):
         """Background thread: stream RADC into ring buffer.
@@ -232,6 +261,8 @@ class KLD7Tracker:
         frame_count = 0
         errors = 0
         max_errors = 10
+        reconnects = 0
+        max_reconnects = 3
 
         # Periodic stream-health logging. Both K-LD7 instances share
         # this loop, so per-orientation Hz asymmetries (one radar
@@ -247,7 +278,7 @@ class KLD7Tracker:
         # via serial_io.connect_with_recovery, so we don't need to
         # re-install it here.
 
-        while self._running and errors < max_errors:
+        while self._running:
             try:
                 for code, payload in self._radar.stream_frames(frame_codes, max_count=-1):
                     if not self._running:
@@ -262,6 +293,7 @@ class KLD7Tracker:
                         self._add_frame(frame)
                         frame_count += 1
                         errors = 0  # reset on success
+                        reconnects = 0
 
                         if frame_count == 1:
                             logger.info(
@@ -305,12 +337,15 @@ class KLD7Tracker:
                     "[KLD7] Stream error %d/%d (%s): %s", errors, max_errors, self.orientation, e
                 )
                 if errors < max_errors:
-                    # Drain serial and retry
-                    try:
-                        self._radar._drain_serial()
-                    except Exception:
-                        pass
-                    time.sleep(0.1)
+                    self._drain_after_stream_error()
+                    continue
+                reconnects += 1
+                if reconnects > max_reconnects:
+                    break
+                if self._reconnect_after_stream_errors(errors):
+                    errors = 0
+                    continue
+                break
 
             except Exception as e:
                 if _is_recoverable_stream_error(e):
@@ -323,12 +358,15 @@ class KLD7Tracker:
                         e,
                     )
                     if errors < max_errors:
-                        try:
-                            self._radar._drain_serial()
-                        except Exception:
-                            pass
-                        time.sleep(0.1)
+                        self._drain_after_stream_error()
                         continue
+                    reconnects += 1
+                    if reconnects > max_reconnects:
+                        break
+                    if self._reconnect_after_stream_errors(errors):
+                        errors = 0
+                        continue
+                    break
 
                 logger.error(
                     "[KLD7] Stream crashed after %d frames (%s): %s",
@@ -341,8 +379,9 @@ class KLD7Tracker:
 
         if errors >= max_errors:
             logger.error(
-                "[KLD7] Stream gave up after %d consecutive errors (%s)",
+                "[KLD7] Stream gave up after %d consecutive errors and %d reconnects (%s)",
                 max_errors,
+                reconnects,
                 self.orientation,
             )
 

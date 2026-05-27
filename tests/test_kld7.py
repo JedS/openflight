@@ -236,6 +236,61 @@ class TestKLD7TrackerRingBuffer:
         assert radar.drain_calls == 1
         assert len(tracker._ring_buffer) == 2
 
+    def test_stream_loop_reconnects_after_consecutive_timeouts(self, monkeypatch):
+        """Repeated command timeouts should trigger a full K-LD7 reconnect."""
+        fake_kld7 = ModuleType("kld7")
+        fake_kld7.FrameCode = SimpleNamespace(RADC="RADC")
+
+        class FakeKLD7Exception(Exception):
+            pass
+
+        fake_kld7.KLD7Exception = FakeKLD7Exception
+        monkeypatch.setitem(sys.modules, "kld7", fake_kld7)
+
+        tracker = self._make_tracker(orientation="horizontal")
+        tracker._running = True
+
+        class TimeoutRadar:
+            def __init__(self):
+                self.calls = 0
+                self.drain_calls = 0
+                self.closed = False
+
+            def stream_frames(self, frame_codes, max_count=-1):
+                self.calls += 1
+                raise FakeKLD7Exception("Timeout waiting for reply")
+
+            def _drain_serial(self):
+                self.drain_calls += 1
+
+            def close(self):
+                self.closed = True
+
+        class RecoveredRadar:
+            def stream_frames(self, frame_codes, max_count=-1):
+                yield ("RADC", b"\x7f" * 3072)
+                tracker._running = False
+
+        timeout_radar = TimeoutRadar()
+        reconnects = []
+
+        def fake_connect():
+            reconnects.append(True)
+            tracker._radar = RecoveredRadar()
+            return True
+
+        tracker._radar = timeout_radar
+        tracker.connect = fake_connect
+        monkeypatch.setattr("openflight.kld7.tracker.time.sleep", lambda _: None)
+
+        tracker._stream_loop()
+
+        assert timeout_radar.calls == 10
+        assert timeout_radar.drain_calls == 9
+        assert timeout_radar.closed is True
+        assert len(reconnects) == 1
+        assert len(tracker._ring_buffer) == 1
+
 
 class TestKLD7RealData:
     """Tests against real captured K-LD7 data."""
