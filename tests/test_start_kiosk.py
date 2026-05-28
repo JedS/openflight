@@ -41,9 +41,12 @@ def test_trackman_test_allows_explicit_session_location():
 
 def test_radc_tuning_values_are_ignored_without_experimental_gate():
     """Loose tuning flags should not alter production extraction by accident."""
-    result = _dry_run("--experimental-kld7-speed-tolerance", "6")
+    result = _dry_run(
+        "--experimental-kld7-speed-tolerance", "6", "--experimental-kld7-spectrum-source", "sum12"
+    )
 
     assert "--experimental-kld7-speed-tolerance 6" not in result.stdout
+    assert "--experimental-kld7-spectrum-source sum12" not in result.stdout
     assert "Ignoring experimental K-LD7 RADC tuning values" in result.stdout
 
 
@@ -54,6 +57,8 @@ def test_radc_tuning_values_are_forwarded_with_experimental_gate():
         "--experimental-kld7-radc-tuning",
         "--experimental-kld7-speed-tolerance",
         "6",
+        "--experimental-kld7-spectrum-source",
+        "sum12",
         "--experimental-kld7-horizontal-angle-limit",
         "30",
     )
@@ -62,4 +67,5 @@ def test_radc_tuning_values_are_forwarded_with_experimental_gate():
     assert "--experimental-kld7-raw-radc-logging" in command
     assert "--experimental-kld7-radc-tuning" in command
     assert "--experimental-kld7-speed-tolerance 6" in command
+    assert "--experimental-kld7-spectrum-source sum12" in command
     assert "--experimental-kld7-horizontal-angle-limit 30" in command

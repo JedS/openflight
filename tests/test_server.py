@@ -78,6 +78,7 @@ class TestKLD7Initialization:
             experimental_kld7_radc_tuning=enabled,
             experimental_kld7_speed_tolerance=8.0,
             experimental_kld7_centroid_floor=0.65,
+            experimental_kld7_spectrum_source="sum12",
             experimental_kld7_ops_bin_tol=12,
             experimental_kld7_ops_bin_penalty=4.0,
             experimental_kld7_ops_anchored_min_snr=2.5,
@@ -100,6 +101,7 @@ class TestKLD7Initialization:
         assert kwargs == {
             "radc_speed_tolerance_mph": 8.0,
             "radc_centroid_floor_frac": 0.65,
+            "radc_spectrum_source": "sum12",
             "radc_ops_bin_outlier_tol": 12,
             "radc_ops_bin_outlier_penalty": 4.0,
             "radc_ops_anchored_peak_min_snr": 2.5,
@@ -140,6 +142,7 @@ class TestKLD7Initialization:
         tuning = {
             "radc_speed_tolerance_mph": 8.0,
             "radc_centroid_floor_frac": 0.25,
+            "radc_spectrum_source": "sum12",
             "radc_ops_bin_outlier_tol": 12,
             "radc_ops_bin_outlier_penalty": 4.0,
             "radc_ops_anchored_peak_min_snr": 2.5,
@@ -178,6 +181,7 @@ class TestKLD7Initialization:
         tuning = {
             "radc_speed_tolerance_mph": 8.0,
             "radc_centroid_floor_frac": 0.25,
+            "radc_spectrum_source": "sum12",
             "radc_ops_bin_outlier_tol": 12,
             "radc_ops_bin_outlier_penalty": 4.0,
             "radc_ops_anchored_peak_min_snr": 2.5,
@@ -233,6 +237,7 @@ class TestKLD7Initialization:
             base_freq=2,
             radc_speed_tolerance_mph=8.0,
             radc_centroid_floor_frac=0.65,
+            radc_spectrum_source="sum12",
             radc_ops_bin_outlier_tol=12,
             radc_ops_bin_outlier_penalty=4.0,
             radc_ops_anchored_peak_min_snr=2.5,
@@ -253,6 +258,7 @@ class TestKLD7Initialization:
             "buffer_seconds": 6.0,
             "radc_speed_tolerance_mph": 8.0,
             "radc_centroid_floor_frac": 0.65,
+            "radc_spectrum_source": "sum12",
             "radc_ops_bin_outlier_tol": 12,
             "radc_ops_bin_outlier_penalty": 4.0,
             "radc_ops_anchored_peak_min_snr": 2.5,
@@ -923,7 +929,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self, include_radc_payload=False):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 calls.append(("ball", shot_timestamp))
                 return KLD7Angle(vertical_deg=12.0, confidence=0.8, num_frames=2)
 
@@ -970,7 +978,9 @@ class TestOnShotDetected:
                 snapshot_calls.append(include_radc_payload)
                 return [{"timestamp": 1000.0, "has_radc": True, "radc_b64": "AQID"}]
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(vertical_deg=12.0, confidence=0.8, num_frames=2)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1024,7 +1034,9 @@ class TestOnShotDetected:
                 assert include_radc_payload is True
                 return [{"timestamp": 1000.0, "has_radc": True}]
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(vertical_deg=12.0, confidence=0.8, num_frames=2)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1074,7 +1086,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self, include_radc_payload=False):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(vertical_deg=79.4, confidence=0.58, num_frames=1)
 
             def reset(self):
@@ -1109,7 +1123,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(vertical_deg=10.7, confidence=0.89, num_frames=6)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1150,7 +1166,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(vertical_deg=10.7, confidence=0.72, num_frames=6)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1306,7 +1324,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self, include_radc_payload=False):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(horizontal_deg=1.5, confidence=0.68, num_frames=3)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1347,7 +1367,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self, include_radc_payload=False):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(horizontal_deg=16.1, confidence=0.68, num_frames=3)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1389,7 +1411,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(horizontal_deg=-8.1, confidence=0.31, num_frames=19)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1586,7 +1610,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(vertical_deg=18.7, confidence=0.8, num_frames=2)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1648,7 +1674,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(vertical_deg=15.0, confidence=0.7, num_frames=2)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1688,7 +1716,9 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return []
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None):
+            def get_angle_for_shot(
+                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None
+            ):
                 return KLD7Angle(vertical_deg=18.7, confidence=0.8, num_frames=2)
 
             def reset(self):

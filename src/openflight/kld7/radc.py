@@ -125,6 +125,52 @@ def compute_fft_complex(
     return result
 
 
+RADC_SPECTRUM_SOURCES = frozenset(
+    {"f1a", "f2a", "f1b", "sum12", "sum1b", "sumall", "min12", "geom12"}
+)
+
+
+def spectrum_from_channel_ffts(
+    f1a_fft: np.ndarray,
+    f2a_fft: np.ndarray,
+    f1b_fft: np.ndarray | None = None,
+    source: str = "f1a",
+) -> np.ndarray:
+    """Return the magnitude spectrum used for target-bin selection.
+
+    Angle is still estimated from the F1A/F2A phase difference. This only
+    changes which Doppler bin is considered the target when multiple receive
+    channels disagree about the strongest local return.
+    """
+    source_norm = source.lower()
+    if source_norm not in RADC_SPECTRUM_SOURCES:
+        choices = ", ".join(sorted(RADC_SPECTRUM_SOURCES))
+        raise ValueError(f"unknown RADC spectrum source {source!r}; expected one of: {choices}")
+
+    f1a_mag = np.abs(f1a_fft)
+    f2a_mag = np.abs(f2a_fft)
+
+    if source_norm == "f1a":
+        return f1a_mag
+    if source_norm == "f2a":
+        return f2a_mag
+    if source_norm == "sum12":
+        return (f1a_mag + f2a_mag) / 2.0
+    if source_norm == "min12":
+        return np.minimum(f1a_mag, f2a_mag)
+    if source_norm == "geom12":
+        return np.sqrt(f1a_mag * f2a_mag)
+
+    if f1b_fft is None:
+        raise ValueError(f"RADC spectrum source {source!r} requires the F1B channel")
+    f1b_mag = np.abs(f1b_fft)
+    if source_norm == "f1b":
+        return f1b_mag
+    if source_norm == "sum1b":
+        return (f1a_mag + f1b_mag) / 2.0
+    return (f1a_mag + f2a_mag + f1b_mag) / 3.0
+
+
 @dataclass(frozen=True)
 class CFARDetection:
     bin_index: int
@@ -663,7 +709,9 @@ def _format_ms(value_s: float | None) -> str:
     return f"{value_s * 1000.0:.1f}"
 
 
-def _rule_reasons_for_vertical_candidate(candidate: _VerticalFrameCandidate) -> tuple[bool, tuple[str, ...]]:
+def _rule_reasons_for_vertical_candidate(
+    candidate: _VerticalFrameCandidate,
+) -> tuple[bool, tuple[str, ...]]:
     reasons: list[str] = []
     if candidate.t_after_impact_s is None:
         reasons.append("missing_t_after")
@@ -701,27 +749,21 @@ def _select_vertical_candidates_with_rules(
         if ok:
             passed.append(cand)
         logger.info(
-            "[RADC-RULES] frame=%d t_ms=%s bin=%d bin_err=%s snr=%.2f angle=%.2f "
-            "coh=%s -> %s%s",
+            "[RADC-RULES] frame=%d t_ms=%s bin=%d bin_err=%s snr=%.2f angle=%.2f coh=%s -> %s%s",
             cand.frame_index,
             _format_ms(cand.t_after_impact_s),
             cand.peak_bin,
             cand.bin_error if cand.bin_error is not None else "n/a",
             cand.snr_linear,
             cand.angle_deg,
-            (
-                f"{cand.phase_coherence:.2f}"
-                if cand.phase_coherence is not None
-                else "n/a"
-            ),
+            (f"{cand.phase_coherence:.2f}" if cand.phase_coherence is not None else "n/a"),
             "PASS" if ok else "FAIL",
             "" if ok else f" ({', '.join(reasons)})",
         )
 
     if not passed:
         logger.info(
-            "[RADC-RULES] No candidates passed primary gates "
-            "(time %.0f-%.0fms, bin<=%d)",
+            "[RADC-RULES] No candidates passed primary gates (time %.0f-%.0fms, bin<=%d)",
             VERTICAL_RULE_TIME_MIN_S * 1000.0,
             VERTICAL_RULE_TIME_MAX_S * 1000.0,
             VERTICAL_RULE_MAX_BIN_ERROR,
@@ -746,51 +788,70 @@ def _select_vertical_candidates_with_rules(
         anchor.angle_deg,
     )
 
-    # Prefer a previous frame so we capture the early-flight rise.
-    previous = [c for c in passed if c.frame_index < anchor.frame_index]
-    if not previous:
-        logger.info("[RADC-RULES] Pair rule: no previous gated frame, using anchor only")
-        return [anchor]
+    by_frame = sorted(passed, key=lambda c: c.frame_index)
+    anchor_pos = by_frame.index(anchor)
 
-    prev = previous[-1]
-    min_prev_snr = max(
-        VERTICAL_RULE_PREV_SNR_FLOOR,
-        VERTICAL_RULE_PREV_SNR_RATIO * anchor.snr_linear,
-    )
-    if prev.snr_linear < min_prev_snr:
-        logger.info(
-            "[RADC-RULES] Pair rule: previous frame=%d failed relaxed SNR "
-            "(snr=%.2f < min %.2f), using anchor only",
-            prev.frame_index,
-            prev.snr_linear,
-            min_prev_snr,
+    def valid_rising_pair(
+        first: _VerticalFrameCandidate,
+        second: _VerticalFrameCandidate,
+        label: str,
+    ) -> tuple[_VerticalFrameCandidate, _VerticalFrameCandidate] | None:
+        partner = first if second is anchor else second
+        min_partner_snr = max(
+            VERTICAL_RULE_PREV_SNR_FLOOR,
+            VERTICAL_RULE_PREV_SNR_RATIO * anchor.snr_linear,
         )
+        if partner.snr_linear < min_partner_snr:
+            logger.info(
+                "[RADC-RULES] Pair rule: %s frame=%d failed relaxed SNR (snr=%.2f < min %.2f)",
+                label,
+                partner.frame_index,
+                partner.snr_linear,
+                min_partner_snr,
+            )
+            return None
+
+        # Rising-ball rule in radar-bearing space.
+        if not (second.angle_deg > first.angle_deg):
+            logger.info(
+                "[RADC-RULES] Pair rule: %s frame=%d failed rising check (first=%.2f, second=%.2f)",
+                label,
+                partner.frame_index,
+                first.angle_deg,
+                second.angle_deg,
+            )
+            return None
+        return (first, second)
+
+    pair = None
+    if anchor_pos > 0:
+        pair = valid_rising_pair(by_frame[anchor_pos - 1], anchor, "previous")
+    else:
+        logger.info("[RADC-RULES] Pair rule: no previous gated frame")
+
+    if pair is None and anchor_pos + 1 < len(by_frame):
+        pair = valid_rising_pair(anchor, by_frame[anchor_pos + 1], "next")
+    elif pair is None:
+        logger.info("[RADC-RULES] Pair rule: no next gated frame")
+
+    if pair is None:
+        logger.info("[RADC-RULES] Pair rule: no adjacent rising pair, using anchor only")
         return [anchor]
 
-    # Rising-ball rule in radar-bearing space.
-    if not (anchor.angle_deg > prev.angle_deg):
-        logger.info(
-            "[RADC-RULES] Pair rule: previous frame=%d failed rising check "
-            "(prev=%.2f, anchor=%.2f), using anchor only",
-            prev.frame_index,
-            prev.angle_deg,
-            anchor.angle_deg,
-        )
-        return [anchor]
-
+    first, second = pair
     logger.info(
         "[RADC-RULES] Pair winner: frames %d -> %d (angles %.2f -> %.2f, "
         "snr %.2f/%.2f, bin_err %s/%s)",
-        prev.frame_index,
-        anchor.frame_index,
-        prev.angle_deg,
-        anchor.angle_deg,
-        prev.snr_linear,
-        anchor.snr_linear,
-        prev.bin_error if prev.bin_error is not None else "n/a",
-        anchor.bin_error if anchor.bin_error is not None else "n/a",
+        first.frame_index,
+        second.frame_index,
+        first.angle_deg,
+        second.angle_deg,
+        first.snr_linear,
+        second.snr_linear,
+        first.bin_error if first.bin_error is not None else "n/a",
+        second.bin_error if second.bin_error is not None else "n/a",
     )
-    return [prev, anchor]
+    return [first, second]
 
 
 def radc_frame_diagnostics(
@@ -1234,6 +1295,7 @@ def extract_launch_angle(
     ops_bin_outlier_tol: int = 25,
     ops_bin_outlier_penalty: float = 10.0,
     centroid_floor_frac: float = 0.5,
+    spectrum_source: str = "f1a",
     ops_anchored_peak_min_snr: float = OPS_ANCHORED_PEAK_MIN_SNR,
     require_ops_anchored_peak: bool = False,
     horizontal_angle_limit_deg: float = 15.0,
@@ -1286,6 +1348,10 @@ def extract_launch_angle(
             per-frame magnitude²-weighted angle centroid (default 0.5,
             i.e. all bins above the half-power point of the peak). Set
             to 1.0 to revert to single-peak-bin angle extraction.
+        spectrum_source: Which RADC channel spectrum is used to pick the
+            target Doppler bin. "f1a" preserves the legacy behavior; "sum12"
+            uses the non-coherent average of the F1A and F2A receive channels
+            before estimating angle from their phase.
         ops_anchored_peak_min_snr: Minimum linear SNR required for the
             OPS-expected local peak before using that frame. Default
             preserves production behavior; lower experimental replay
@@ -1415,8 +1481,16 @@ def extract_launch_angle(
 
             f1a_iq = to_complex_iq(channels["f1a_i"], channels["f1a_q"])
             f2a_iq = to_complex_iq(channels["f2a_i"], channels["f2a_q"])
+            f1b_iq = (
+                to_complex_iq(channels["f1b_i"], channels["f1b_q"])
+                if "f1b_i" in channels and "f1b_q" in channels
+                else None
+            )
 
-            spec = compute_spectrum(f1a_iq, fft_size=fft_size)
+            f1a_fft = compute_fft_complex(f1a_iq, fft_size=fft_size)
+            f2a_fft = compute_fft_complex(f2a_iq, fft_size=fft_size)
+            f1b_fft = compute_fft_complex(f1b_iq, fft_size=fft_size) if f1b_iq is not None else None
+            spec = spectrum_from_channel_ffts(f1a_fft, f2a_fft, f1b_fft, source=spectrum_source)
             # SNR of the peak bin vs full-spectrum noise floor
             full_median = float(np.median(spec[spec > 0]))
             peak_bin: int | None = None
@@ -1447,8 +1521,6 @@ def extract_launch_angle(
                 continue
 
             # Per-bin angle at the peak
-            f1a_fft = compute_fft_complex(f1a_iq, fft_size=fft_size)
-            f2a_fft = compute_fft_complex(f2a_iq, fft_size=fft_size)
             angles = per_bin_angle_deg(f1a_fft, f2a_fft)
 
             # Magnitude²-weighted centroid of the per-bin angles across
@@ -1684,7 +1756,7 @@ def extract_launch_angle(
             and distance_ft is not None
         ):
             per_frame_geom = [
-                (float(clean_times[i]), float(clean_angs[i]), float(w[i]))
+                (float(clean_times[i]), float(clean_angs[i] + angle_offset_deg), float(w[i]))
                 for i in range(len(clean_angs))
                 if not math.isnan(clean_times[i])
             ]
@@ -1753,6 +1825,7 @@ def extract_launch_angle(
                 "launch_angle_deg": round(corrected_angle, 1),
                 "raw_angle_deg": round(weighted_angle, 1),
                 "angle_offset_deg": angle_offset_deg,
+                "spectrum_source": spectrum_source,
                 "estimator": estimator_used,
                 "geom_fit_rmse_deg": (
                     round(geom_fit_rmse, 2) if geom_fit_rmse is not None else None

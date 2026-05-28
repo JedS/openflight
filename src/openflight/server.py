@@ -71,6 +71,7 @@ experimental_kld7_raw_radc_logging: bool = False
 _DEFAULT_KLD7_RADC_TUNING = {
     "radc_speed_tolerance_mph": 10.0,
     "radc_centroid_floor_frac": 0.5,
+    "radc_spectrum_source": "f1a",
     "radc_ops_bin_outlier_tol": 25,
     "radc_ops_bin_outlier_penalty": 10.0,
     "radc_ops_anchored_peak_min_snr": 5.0,
@@ -711,6 +712,7 @@ def _kld7_radc_tuning_kwargs(args) -> dict:
     return {
         "radc_speed_tolerance_mph": args.experimental_kld7_speed_tolerance,
         "radc_centroid_floor_frac": args.experimental_kld7_centroid_floor,
+        "radc_spectrum_source": args.experimental_kld7_spectrum_source,
         "radc_ops_bin_outlier_tol": args.experimental_kld7_ops_bin_tol,
         "radc_ops_bin_outlier_penalty": args.experimental_kld7_ops_bin_penalty,
         "radc_ops_anchored_peak_min_snr": args.experimental_kld7_ops_anchored_min_snr,
@@ -907,6 +909,7 @@ def init_kld7(
     base_freq=0,
     radc_speed_tolerance_mph=10.0,
     radc_centroid_floor_frac=0.5,
+    radc_spectrum_source="f1a",
     radc_ops_bin_outlier_tol=25,
     radc_ops_bin_outlier_penalty=10.0,
     radc_ops_anchored_peak_min_snr=5.0,
@@ -935,6 +938,7 @@ def init_kld7(
             buffer_seconds=6.0,
             radc_speed_tolerance_mph=radc_speed_tolerance_mph,
             radc_centroid_floor_frac=radc_centroid_floor_frac,
+            radc_spectrum_source=radc_spectrum_source,
             radc_ops_bin_outlier_tol=radc_ops_bin_outlier_tol,
             radc_ops_bin_outlier_penalty=radc_ops_bin_outlier_penalty,
             radc_ops_anchored_peak_min_snr=radc_ops_anchored_peak_min_snr,
@@ -2320,6 +2324,15 @@ def main():
         type=float,
         default=0.5,
         help="Experimental K-LD7 RADC centroid floor fraction (default: 0.5)",
+    )
+    parser.add_argument(
+        "--experimental-kld7-spectrum-source",
+        choices=("f1a", "f2a", "f1b", "sum12", "sum1b", "sumall", "min12", "geom12"),
+        default="f1a",
+        help=(
+            "Experimental K-LD7 spectrum used for target-bin selection "
+            "(default: f1a; try sum12 for F1A+F2A non-coherent selection)"
+        ),
     )
     parser.add_argument(
         "--experimental-kld7-ops-bin-tol",

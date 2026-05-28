@@ -659,6 +659,16 @@ class TestKLD7Integration:
 class TestRADCAngleExtraction:
     """Tests for RADC-based phase-interferometry launch angle extraction."""
 
+    def test_sum12_spectrum_source_can_select_peak_seen_across_channels(self):
+        """Combined-channel bin selection should not be locked to F1A alone."""
+        from openflight.kld7.radc import spectrum_from_channel_ffts
+
+        f1a_fft = np.array([0.0, 10.0, 1.0], dtype=np.complex128)
+        f2a_fft = np.array([0.0, 2.0, 20.0], dtype=np.complex128)
+
+        assert int(np.argmax(spectrum_from_channel_ffts(f1a_fft, f2a_fft, source="f1a"))) == 1
+        assert int(np.argmax(spectrum_from_channel_ffts(f1a_fft, f2a_fft, source="sum12"))) == 2
+
     def _make_tracker(self, orientation="vertical"):
         tracker = KLD7Tracker.__new__(KLD7Tracker)
         tracker.orientation = orientation
@@ -773,15 +783,19 @@ class TestRADCAngleExtraction:
 
         v, d, mount, alpha_true = ball_speed_mph, 5.5, 18.0, 16.0
         impact_ts = time.time()
-        flight_times = [0.056, 0.112]  # two frames inside the in-flight window
+        flight_times = [0.056, 0.084]  # two frames inside the vertical rule window
         quiet = self._make_quiet_radc_payload()
 
         frames = [{"timestamp": impact_ts - (6 - i) * 0.056, "radc": quiet} for i in range(6)]
-        for t in flight_times:
+        for t, amplitude in zip(flight_times, [4000, 6000]):
             beta = predicted_bearing_deg(alpha_true, t, v, d, mount)
             # The synth payload measures -angle_deg (see the sign note above),
             # so inject -beta to make the algorithm see the true bearing beta.
-            radc = self._make_radc_payload_with_tone(aliased_kmh, angle_deg=-beta)
+            radc = self._make_radc_payload_with_tone(
+                aliased_kmh,
+                angle_deg=-beta,
+                amplitude=amplitude,
+            )
             frames.append({"timestamp": impact_ts + t, "radc": radc})
 
         results = extract_launch_angle(
@@ -799,6 +813,83 @@ class TestRADCAngleExtraction:
         assert best["estimator"] == "geometry"
         assert best["geom_fit_rmse_deg"] is not None
         assert abs(best["launch_angle_deg"] - alpha_true) < 3.0
+
+    def test_geometry_estimator_applies_angle_offset_to_frame_bearings(self):
+        """Geometry mode should use the configured bearing offset before fitting."""
+        from openflight.kld7.radc import extract_launch_angle, predicted_bearing_deg
+
+        ball_speed_mph = 72.0
+        ball_kmh = ball_speed_mph * 1.609
+        aliased_kmh = ball_kmh % 200.0
+        if aliased_kmh > 100.0:
+            aliased_kmh -= 200.0
+
+        v, d, mount, alpha_true, offset = ball_speed_mph, 5.5, 18.0, 16.0, 5.0
+        impact_ts = time.time()
+        quiet = self._make_quiet_radc_payload()
+        frames = [{"timestamp": impact_ts - (6 - i) * 0.056, "radc": quiet} for i in range(6)]
+
+        for t, amplitude in [(0.056, 4000), (0.084, 6000)]:
+            beta = predicted_bearing_deg(alpha_true, t, v, d, mount)
+            radc = self._make_radc_payload_with_tone(
+                aliased_kmh,
+                angle_deg=-(beta - offset),
+                amplitude=amplitude,
+            )
+            frames.append({"timestamp": impact_ts + t, "radc": radc})
+
+        results = extract_launch_angle(
+            frames,
+            ops243_ball_speed_mph=ball_speed_mph,
+            angle_offset_deg=offset,
+            orientation="vertical",
+            vertical_estimator="geometry",
+            shot_timestamp=impact_ts,
+            mount_deg=mount,
+            distance_ft=d,
+        )
+
+        assert results
+        assert results[0]["estimator"] == "geometry"
+        assert abs(results[0]["launch_angle_deg"] - alpha_true) < 3.0
+
+    def test_geometry_estimator_can_pair_anchor_with_next_rising_frame(self):
+        """A strong first in-flight frame should still pair with the next rising frame."""
+        from openflight.kld7.radc import extract_launch_angle, predicted_bearing_deg
+
+        ball_speed_mph = 72.0
+        ball_kmh = ball_speed_mph * 1.609
+        aliased_kmh = ball_kmh % 200.0
+        if aliased_kmh > 100.0:
+            aliased_kmh -= 200.0
+
+        v, d, mount, alpha_true = ball_speed_mph, 5.5, 18.0, 16.0
+        impact_ts = time.time()
+        quiet = self._make_quiet_radc_payload()
+        frames = [{"timestamp": impact_ts - (6 - i) * 0.056, "radc": quiet} for i in range(6)]
+
+        for t, amplitude in [(0.056, 6000), (0.084, 4000)]:
+            beta = predicted_bearing_deg(alpha_true, t, v, d, mount)
+            radc = self._make_radc_payload_with_tone(
+                aliased_kmh,
+                angle_deg=-beta,
+                amplitude=amplitude,
+            )
+            frames.append({"timestamp": impact_ts + t, "radc": radc})
+
+        results = extract_launch_angle(
+            frames,
+            ops243_ball_speed_mph=ball_speed_mph,
+            orientation="vertical",
+            vertical_estimator="geometry",
+            shot_timestamp=impact_ts,
+            mount_deg=mount,
+            distance_ft=d,
+        )
+
+        assert results
+        assert results[0]["estimator"] == "geometry"
+        assert abs(results[0]["launch_angle_deg"] - alpha_true) < 3.0
 
     def test_geometry_estimator_falls_back_to_naive_without_impact_time(self):
         """Without a shot_timestamp the geometry cannot run; it must fall back."""
@@ -1152,6 +1243,7 @@ class TestRADCAngleExtraction:
         tracker = self._make_tracker(orientation="vertical")
         tracker.radc_speed_tolerance_mph = 8.0
         tracker.radc_centroid_floor_frac = 0.65
+        tracker.radc_spectrum_source = "sum12"
         tracker.radc_ops_bin_outlier_tol = 12
         tracker.radc_ops_bin_outlier_penalty = 4.0
         tracker.radc_ops_anchored_peak_min_snr = 2.5
@@ -1187,6 +1279,7 @@ class TestRADCAngleExtraction:
                 "speed_tolerance_mph": 8.0,
                 "impact_energy_threshold": 2.5,
                 "centroid_floor_frac": 0.65,
+                "spectrum_source": "sum12",
                 "ops_bin_outlier_tol": 12,
                 "ops_bin_outlier_penalty": 4.0,
                 "ops_anchored_peak_min_snr": 2.5,
@@ -1194,6 +1287,7 @@ class TestRADCAngleExtraction:
                 "orientation": "vertical",
                 "vertical_estimator": "geometry",
                 "shot_timestamp": None,
+                "impact_timestamp": None,
                 "mount_deg": 18.0,
                 "distance_ft": 5.5,
             }

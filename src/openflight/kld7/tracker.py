@@ -83,6 +83,7 @@ class KLD7Tracker:
     shot_window_after_s = 0.75
     radc_speed_tolerance_mph = 10.0
     radc_centroid_floor_frac = 0.5
+    radc_spectrum_source = "f1a"
     radc_ops_bin_outlier_tol = 25
     radc_ops_bin_outlier_penalty = 10.0
     radc_ops_anchored_peak_min_snr = 5.0
@@ -105,6 +106,7 @@ class KLD7Tracker:
         base_freq: int = 0,
         radc_speed_tolerance_mph: float = 10.0,
         radc_centroid_floor_frac: float = 0.5,
+        radc_spectrum_source: str = "f1a",
         radc_ops_bin_outlier_tol: int = 25,
         radc_ops_bin_outlier_penalty: float = 10.0,
         radc_ops_anchored_peak_min_snr: float = 5.0,
@@ -125,6 +127,7 @@ class KLD7Tracker:
         self.base_freq = base_freq
         self.radc_speed_tolerance_mph = radc_speed_tolerance_mph
         self.radc_centroid_floor_frac = radc_centroid_floor_frac
+        self.radc_spectrum_source = radc_spectrum_source
         self.radc_ops_bin_outlier_tol = radc_ops_bin_outlier_tol
         self.radc_ops_bin_outlier_penalty = radc_ops_bin_outlier_penalty
         self.radc_ops_anchored_peak_min_snr = radc_ops_anchored_peak_min_snr
@@ -539,6 +542,7 @@ class KLD7Tracker:
                 speed_tolerance_mph=self.radc_speed_tolerance_mph,
                 impact_energy_threshold=energy_threshold,
                 centroid_floor_frac=self.radc_centroid_floor_frac,
+                spectrum_source=self.radc_spectrum_source,
                 ops_bin_outlier_tol=self.radc_ops_bin_outlier_tol,
                 ops_bin_outlier_penalty=self.radc_ops_bin_outlier_penalty,
                 ops_anchored_peak_min_snr=self.radc_ops_anchored_peak_min_snr,
