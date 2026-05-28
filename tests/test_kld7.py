@@ -922,9 +922,11 @@ class TestRADCAngleExtraction:
         tracker._add_frame(KLD7Frame(timestamp=shot_ts + 1.0, radc=b"stale-future"))
 
         seen_timestamps = []
+        seen_kwargs = {}
 
         def fake_extract_launch_angle(frames, **kwargs):
             seen_timestamps.extend(frame["timestamp"] for frame in frames)
+            seen_kwargs.update(kwargs)
             return [
                 {
                     "launch_angle_deg": 2.5,
@@ -960,6 +962,7 @@ class TestRADCAngleExtraction:
         assert result.frames_examined == 2
         assert result.frames_available == 4
         assert result.frames_ignored_stale == 2
+        assert seen_kwargs["impact_timestamp"] == pytest.approx(shot_ts)
 
     def test_get_angle_for_shot_uses_all_radc_frames_without_timestamp(self, monkeypatch):
         """Legacy callers without a shot timestamp retain all-frame extraction behavior."""

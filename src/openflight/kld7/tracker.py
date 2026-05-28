@@ -526,6 +526,11 @@ class KLD7Tracker:
 
         results = []
         relaxed_retry = False
+        impact_ts_for_rules = (
+            float(impact_timestamp)
+            if impact_timestamp is not None
+            else (float(shot_timestamp) if shot_timestamp is not None else None)
+        )
         for attempt_idx, energy_threshold in enumerate(energy_attempts):
             results = extract_launch_angle(
                 frames,
@@ -540,7 +545,8 @@ class KLD7Tracker:
                 horizontal_angle_limit_deg=self.radc_horizontal_angle_limit_deg,
                 orientation=self.orientation,
                 vertical_estimator=self.vertical_estimator,
-                shot_timestamp=impact_timestamp,
+                shot_timestamp=impact_ts_for_rules,
+                impact_timestamp=impact_ts_for_rules,
                 mount_deg=self.mount_tilt_deg,
                 distance_ft=self.ball_distance_ft,
             )

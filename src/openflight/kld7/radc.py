@@ -43,6 +43,13 @@ DEFAULT_BALL_ALIASED_MAX_KMH = -7.0
 WAVELENGTH_M = 3e8 / 24.125e9  # ~12.43 mm
 ANTENNA_SPACING_M = 8.0e-3  # ~0.64λ, calibrated against PDAT reference data
 
+# Vertical rule-stack candidate selection (impact-relative, OPS-anchored).
+VERTICAL_RULE_TIME_MIN_S = 0.020
+VERTICAL_RULE_TIME_MAX_S = 0.100
+VERTICAL_RULE_MAX_BIN_ERROR = 50
+VERTICAL_RULE_PREV_SNR_RATIO = 0.50
+VERTICAL_RULE_PREV_SNR_FLOOR = 2.0
+
 
 def parse_radc_payload(payload: bytes) -> dict[str, np.ndarray]:
     """Parse a 3072-byte RADC payload into six uint16 channel arrays.
@@ -635,6 +642,157 @@ def _phase_coherence_for_peak(
     return float(np.clip(coherence, 0.0, 1.0))
 
 
+@dataclass(frozen=True)
+class _VerticalFrameCandidate:
+    frame_index: int
+    peak_bin: int
+    bin_error: int | None
+    snr_linear: float
+    angle_deg: float
+    speed_mph: float
+    raw_angle_deg: float
+    geom_bearing_deg: float
+    t_after_impact_s: float | None
+    phase_coherence: float | None
+    peak_width_bins: int
+
+
+def _format_ms(value_s: float | None) -> str:
+    if value_s is None:
+        return "n/a"
+    return f"{value_s * 1000.0:.1f}"
+
+
+def _rule_reasons_for_vertical_candidate(candidate: _VerticalFrameCandidate) -> tuple[bool, tuple[str, ...]]:
+    reasons: list[str] = []
+    if candidate.t_after_impact_s is None:
+        reasons.append("missing_t_after")
+    else:
+        if candidate.t_after_impact_s < VERTICAL_RULE_TIME_MIN_S:
+            reasons.append("time_too_early")
+        elif candidate.t_after_impact_s > VERTICAL_RULE_TIME_MAX_S:
+            reasons.append("time_too_late")
+
+    if candidate.bin_error is not None and candidate.bin_error > VERTICAL_RULE_MAX_BIN_ERROR:
+        reasons.append("bin_error_gt_50")
+
+    return (len(reasons) == 0, tuple(reasons))
+
+
+def _select_vertical_candidates_with_rules(
+    candidates: list[_VerticalFrameCandidate],
+) -> list[_VerticalFrameCandidate]:
+    """Apply the vertical launch rule stack and return selected candidates.
+
+    Rule stack:
+      1) time gate: 20-100ms after impact
+      2) OPS-bin gate: <= 50 bins from expected peak
+      3) anchor winner: smallest bin error, then highest SNR/coherence
+      4) optional previous frame: relaxed SNR (>=50% of anchor) + rising angle
+      5) fallback: anchor-only if no valid pair
+    """
+    if not candidates:
+        logger.info("[RADC-RULES] No per-frame candidates survived peak extraction")
+        return []
+
+    passed: list[_VerticalFrameCandidate] = []
+    for cand in candidates:
+        ok, reasons = _rule_reasons_for_vertical_candidate(cand)
+        if ok:
+            passed.append(cand)
+        logger.info(
+            "[RADC-RULES] frame=%d t_ms=%s bin=%d bin_err=%s snr=%.2f angle=%.2f "
+            "coh=%s -> %s%s",
+            cand.frame_index,
+            _format_ms(cand.t_after_impact_s),
+            cand.peak_bin,
+            cand.bin_error if cand.bin_error is not None else "n/a",
+            cand.snr_linear,
+            cand.angle_deg,
+            (
+                f"{cand.phase_coherence:.2f}"
+                if cand.phase_coherence is not None
+                else "n/a"
+            ),
+            "PASS" if ok else "FAIL",
+            "" if ok else f" ({', '.join(reasons)})",
+        )
+
+    if not passed:
+        logger.info(
+            "[RADC-RULES] No candidates passed primary gates "
+            "(time %.0f-%.0fms, bin<=%d)",
+            VERTICAL_RULE_TIME_MIN_S * 1000.0,
+            VERTICAL_RULE_TIME_MAX_S * 1000.0,
+            VERTICAL_RULE_MAX_BIN_ERROR,
+        )
+        return []
+
+    # Anchor frame: strongest match to OPS bin, then signal strength/coherence.
+    anchor = sorted(
+        passed,
+        key=lambda c: (
+            c.bin_error if c.bin_error is not None else 99999,
+            -c.snr_linear,
+            -1.0 if c.phase_coherence is None else -c.phase_coherence,
+        ),
+    )[0]
+    logger.info(
+        "[RADC-RULES] Anchor frame=%d t_ms=%s bin_err=%s snr=%.2f angle=%.2f",
+        anchor.frame_index,
+        _format_ms(anchor.t_after_impact_s),
+        anchor.bin_error if anchor.bin_error is not None else "n/a",
+        anchor.snr_linear,
+        anchor.angle_deg,
+    )
+
+    # Prefer a previous frame so we capture the early-flight rise.
+    previous = [c for c in passed if c.frame_index < anchor.frame_index]
+    if not previous:
+        logger.info("[RADC-RULES] Pair rule: no previous gated frame, using anchor only")
+        return [anchor]
+
+    prev = previous[-1]
+    min_prev_snr = max(
+        VERTICAL_RULE_PREV_SNR_FLOOR,
+        VERTICAL_RULE_PREV_SNR_RATIO * anchor.snr_linear,
+    )
+    if prev.snr_linear < min_prev_snr:
+        logger.info(
+            "[RADC-RULES] Pair rule: previous frame=%d failed relaxed SNR "
+            "(snr=%.2f < min %.2f), using anchor only",
+            prev.frame_index,
+            prev.snr_linear,
+            min_prev_snr,
+        )
+        return [anchor]
+
+    # Rising-ball rule in radar-bearing space.
+    if not (anchor.angle_deg > prev.angle_deg):
+        logger.info(
+            "[RADC-RULES] Pair rule: previous frame=%d failed rising check "
+            "(prev=%.2f, anchor=%.2f), using anchor only",
+            prev.frame_index,
+            prev.angle_deg,
+            anchor.angle_deg,
+        )
+        return [anchor]
+
+    logger.info(
+        "[RADC-RULES] Pair winner: frames %d -> %d (angles %.2f -> %.2f, "
+        "snr %.2f/%.2f, bin_err %s/%s)",
+        prev.frame_index,
+        anchor.frame_index,
+        prev.angle_deg,
+        anchor.angle_deg,
+        prev.snr_linear,
+        anchor.snr_linear,
+        prev.bin_error if prev.bin_error is not None else "n/a",
+        anchor.bin_error if anchor.bin_error is not None else "n/a",
+    )
+    return [prev, anchor]
+
+
 def radc_frame_diagnostics(
     frame: dict,
     frame_index: int = 0,
@@ -1081,6 +1239,7 @@ def extract_launch_angle(
     horizontal_angle_limit_deg: float = 15.0,
     vertical_estimator: str = "naive",
     shot_timestamp: float | None = None,
+    impact_timestamp: float | None = None,
     mount_deg: float | None = None,
     distance_ft: float | None = None,
 ) -> list[dict]:
@@ -1150,6 +1309,9 @@ def extract_launch_angle(
             flight time (frame_timestamp - shot_timestamp) for the geometry
             estimator. Must be the true impact instant, not the raw rolling-
             buffer first-byte time (the geometry is ~0.08°/ms sensitive).
+        impact_timestamp: Explicit impact time used by impact-relative vertical
+            frame-rule gating (and as timing fallback when shot_timestamp is
+            unavailable). Prefer passing this from OPS trigger timing.
         mount_deg: Radar mount tilt in degrees (geometry estimator only).
         distance_ft: Ball-to-radar-front distance in feet (geometry estimator
             only). A weak lever — a fixed install value is fine (±1 ft ≈ 0.2° MAE).
@@ -1212,6 +1374,9 @@ def extract_launch_angle(
             shot_groups[-1].append(idx)
 
     results = []
+    # Impact-relative timing for rule-stack gating; prefer the explicit
+    # impact timestamp when provided, otherwise fall back to shot timestamp.
+    time_ref = impact_timestamp if impact_timestamp is not None else shot_timestamp
     for shot_idx, impact_group in enumerate(shot_groups):
         # Expand to impact -1 before, +2 after (ball appears slightly after)
         frame_set = set()
@@ -1221,14 +1386,17 @@ def extract_launch_angle(
                 if 0 <= fi < len(frames):
                     frame_set.add(fi)
 
-        # Peak-bin extraction: for each frame, find the single strongest
-        # bin in the ball velocity band and take the angle at that bin only.
-        # This avoids averaging across noisy weak detections.
+        # Peak-bin extraction: for each frame, find the strongest bin in
+        # the ball velocity band and build per-frame candidates.
         peak_angles = []
         peak_snrs = []
         peak_speeds_mph = []
         peak_bins: list[int] = []
         peak_times: list[float | None] = []  # flight time per frame (s), for geometry
+        peak_coherences: list[float | None] = []
+        peak_widths: list[int] = []
+        peak_frame_indices: list[int] = []
+        per_frame_t_after_impact: list[float | None] = []
 
         for fi in sorted(frame_set):
             radc_raw = frames[fi].get("radc")
@@ -1236,8 +1404,8 @@ def extract_launch_angle(
                 continue
             frame_ts = frames[fi].get("timestamp")
             flight_time_s = (
-                float(frame_ts) - shot_timestamp
-                if frame_ts is not None and shot_timestamp is not None
+                float(frame_ts) - float(time_ref)
+                if frame_ts is not None and time_ref is not None
                 else None
             )
             try:
@@ -1326,13 +1494,42 @@ def extract_launch_angle(
                 # Disabled (frac=1.0) — fall back to the legacy
                 # single-peak-bin angle for exact backward compatibility.
                 centroid_angle = float(angles[peak_bin])
+            phase_coherence = _phase_coherence_for_peak(
+                f1a_fft,
+                f2a_fft,
+                spec,
+                peak_bin,
+                peak_val,
+                peak_band,
+                coherence_bins=4,
+            )
+            peak_width = int(
+                _centroid_angle_for_peak(
+                    angles,
+                    spec,
+                    peak_bin,
+                    peak_val,
+                    peak_band,
+                    centroid_floor_frac,
+                )[1]
+            )
+
+            vel = bin_to_velocity_kmh(peak_bin, fft_size, max_speed_kmh)
+            frame_speed_mph = (200.0 + vel) / 1.609
+            frame_ts = _optional_float(frames[fi].get("timestamp"))
+            t_after_impact: float | None = None
+            if frame_ts is not None and time_ref is not None:
+                t_after_impact = frame_ts - float(time_ref)
 
             peak_angles.append(centroid_angle)
             peak_snrs.append(snr)
             peak_bins.append(peak_bin)
+            peak_speeds_mph.append(frame_speed_mph)
             peak_times.append(flight_time_s)
-            vel = bin_to_velocity_kmh(peak_bin, fft_size, max_speed_kmh)
-            peak_speeds_mph.append((200.0 + vel) / 1.609)
+            peak_coherences.append(phase_coherence)
+            peak_widths.append(peak_width)
+            peak_frame_indices.append(fi)
+            per_frame_t_after_impact.append(t_after_impact)
 
         if not peak_angles:
             continue
@@ -1341,41 +1538,92 @@ def extract_launch_angle(
         snrs = np.array(peak_snrs)
         bins_arr = np.array(peak_bins, dtype=int)
         times_arr = np.array([np.nan if t is None else t for t in peak_times], dtype=float)
+        raw_angs = angs.copy()
+        geom_arr = np.zeros_like(angs, dtype=float)
+        used_rule_stack = False
+        if orientation == "vertical" and time_ref is not None:
+            candidates: list[_VerticalFrameCandidate] = []
+            for i, angle in enumerate(angs):
+                bin_error = (
+                    circular_bin_distance(int(bins_arr[i]), ops_expected_bin, fft_size)
+                    if ops_expected_bin is not None
+                    else None
+                )
+                candidates.append(
+                    _VerticalFrameCandidate(
+                        frame_index=int(peak_frame_indices[i]),
+                        peak_bin=int(bins_arr[i]),
+                        bin_error=bin_error,
+                        snr_linear=float(snrs[i]),
+                        angle_deg=float(angle),
+                        speed_mph=float(peak_speeds_mph[i]),
+                        raw_angle_deg=float(raw_angs[i]),
+                        geom_bearing_deg=float(geom_arr[i]),
+                        t_after_impact_s=per_frame_t_after_impact[i],
+                        phase_coherence=peak_coherences[i],
+                        peak_width_bins=int(peak_widths[i]),
+                    )
+                )
+            selected = _select_vertical_candidates_with_rules(candidates)
+            if selected:
+                selected_index = {c.frame_index for c in selected}
+                keep_mask = np.array(
+                    [fi in selected_index for fi in peak_frame_indices],
+                    dtype=bool,
+                )
+                clean_angs = angs[keep_mask]
+                clean_snrs = snrs[keep_mask]
+                clean_bins = bins_arr[keep_mask]
+                clean_times = times_arr[keep_mask]
+                used_rule_stack = True
+                if len(clean_angs) == 1 and clean_snrs[0] < 5.0:
+                    logger.info(
+                        "[RADC-RULES] Anchor-only frame below single-frame SNR floor "
+                        "(%.2f < 5.0) — rejected",
+                        clean_snrs[0],
+                    )
+                    continue
+            else:
+                logger.info(
+                    "[RADC-RULES] No frame selected by vertical rule stack; "
+                    "falling back to legacy aggregation",
+                )
 
-        if len(angs) == 1:
-            # Single-frame detection — accept if SNR is strong.
-            # Golf balls transit the K-LD7 beam in ~1 frame at 18 FPS,
-            # so a single high-SNR frame is the expected case.
-            if snrs[0] < 5.0:
-                continue
-            clean_angs = angs
-            clean_snrs = snrs
-            clean_bins = bins_arr
-            clean_times = times_arr
-        else:
-            # Multi-frame: outlier rejection.
-            #
-            # Drop the frame furthest from the median angle, *unless*
-            # one frame's SNR is dramatically larger than the others.
-            # In that case the median is being set by low-SNR noise
-            # frames around a single high-SNR ball frame, and dropping
-            # the angular outlier would discard the only real
-            # detection. Instead we drop the lowest-SNR frame.
-            clean_mask = np.ones(len(angs), dtype=bool)
-            if len(angs) >= 3:
-                max_snr = float(snrs.max())
-                med_snr = float(np.median(snrs))
-                snr_dominant = max_snr > 10.0 * max(med_snr, 1.0)
-                if snr_dominant:
-                    worst = int(np.argmin(snrs))
-                else:
-                    med = float(np.median(angs))
+        if not used_rule_stack:
+            if len(angs) == 1:
+                # Single-frame detection — accept if SNR is strong.
+                # Golf balls transit the K-LD7 beam in ~1 frame at 18 FPS,
+                # so a single high-SNR frame is the expected case.
+                if snrs[0] < 5.0:
+                    continue
+                clean_angs = angs
+                clean_snrs = snrs
+                clean_bins = bins_arr
+                clean_times = times_arr
+            else:
+                # Multi-frame: outlier rejection.
+                #
+                # Drop the frame furthest from the median angle, *unless*
+                # one frame's SNR is dramatically larger than the others.
+                # In that case the median is being set by low-SNR noise
+                # frames around a single high-SNR ball frame, and dropping
+                # the angular outlier would discard the only real
+                # detection. Instead we drop the lowest-SNR frame.
+                clean_mask = np.ones(len(angs), dtype=bool)
+                if len(angs) >= 3:
+                    max_snr = float(snrs.max())
+                    med_snr = float(np.median(snrs))
+                    snr_dominant = max_snr > 10.0 * max(med_snr, 1.0)
+                    if snr_dominant:
+                        worst = int(np.argmin(snrs))
+                    else:
+                        med = float(np.median(angs))
                     worst = int(np.argmax(np.abs(angs - med)))
-                clean_mask[worst] = False
-            clean_angs = angs[clean_mask]
-            clean_snrs = snrs[clean_mask]
-            clean_bins = bins_arr[clean_mask]
-            clean_times = times_arr[clean_mask]
+                    clean_mask[worst] = False
+                clean_angs = angs[clean_mask]
+                clean_snrs = snrs[clean_mask]
+                clean_bins = bins_arr[clean_mask]
+                clean_times = times_arr[clean_mask]
 
         # SNR²-weighted average of surviving peaks. When the OPS-expected
         # bin is known, frames whose peak bin is far from it (likely

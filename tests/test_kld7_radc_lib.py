@@ -846,6 +846,56 @@ class TestOpsBinSoftAnchor:
         # And reference the troubleshooting doc
         assert "troubleshooting" in warns[0].message
 
+    def test_vertical_rule_stack_prefers_rising_previous_pair(self, caplog):
+        """Vertical rule stack should select previous+anchor when the pair rises.
+
+        Scenario:
+          - frame at 23ms: weaker, in-bin, lower angle
+          - frame at 57ms: strongest anchor, in-bin
+          - frame at 91ms: also strong, but selected pair should still be
+            previous->anchor according to the rule stack.
+        """
+        import logging
+
+        ops_speed_mph = 108.0
+        ops_bin = expected_ball_bin_from_speed(ops_speed_mph)
+        impact_t = 1000.0
+
+        frames = [
+            self._noise_frame(ts=impact_t - 0.22, seed=301),
+            self._noise_frame(ts=impact_t - 0.10, seed=302),
+            self._make_frame_at_bin(
+                peak_bin=ops_bin + 18, angle_deg=-12.0,
+                amplitude=6800.0, seed=303, ts=impact_t + 0.023,
+            ),
+            self._make_frame_at_bin(
+                peak_bin=ops_bin, angle_deg=-8.0,
+                amplitude=9800.0, seed=304, ts=impact_t + 0.057,
+            ),
+            self._make_frame_at_bin(
+                peak_bin=ops_bin, angle_deg=-6.0,
+                amplitude=8600.0, seed=305, ts=impact_t + 0.091,
+            ),
+            self._noise_frame(ts=impact_t + 0.16, seed=306),
+        ]
+
+        with caplog.at_level(logging.INFO, logger="openflight.kld7.radc"):
+            results = extract_launch_angle(
+                frames=frames,
+                ops243_ball_speed_mph=ops_speed_mph,
+                speed_tolerance_mph=10.0,
+                impact_energy_threshold=0.5,
+                orientation="vertical",
+                angle_offset_deg=18.0,
+                impact_timestamp=impact_t,
+            )
+
+        assert results, "expected a vertical launch result from synthetic frames"
+        assert results[0]["frame_count"] == 2
+        assert any("Pair winner" in rec.message for rec in caplog.records), (
+            "expected rule-stack logs to include the winning pair"
+        )
+
 
 class TestMultiBinCentroidAngle:
     """Tests for the magnitude²-weighted centroid angle aggregation
