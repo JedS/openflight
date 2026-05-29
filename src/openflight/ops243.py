@@ -33,6 +33,8 @@ from typing import List, Optional
 import serial
 import serial.tools.list_ports
 
+from .serial_latency import log_usb_serial_latency_timer
+
 # Configure logging for raw radar data
 logger = logging.getLogger("ops243")
 raw_logger = logging.getLogger("ops243.raw")
@@ -160,6 +162,7 @@ class OPS243Radar:
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE
             )
+            log_usb_serial_latency_timer(logger, "OPS", self.port)
             # Drain any in-progress dump (e.g. radar triggered while no software was running).
             # Opening the port unblocks the radar's UART TX, so we read until silence.
             self._drain_serial()

@@ -201,6 +201,49 @@ class TestKLD7SerialIO:
 
         assert radar._get_response() == FakeResponse.OK
 
+    def test_robust_read_packet_records_packet_timing(self, monkeypatch):
+        fake_kld7 = ModuleType("kld7")
+
+        class FakeKLD7Exception(Exception):
+            pass
+
+        fake_kld7.KLD7Exception = FakeKLD7Exception
+        monkeypatch.setitem(sys.modules, "kld7", fake_kld7)
+
+        from openflight.kld7 import serial_io
+
+        times = iter([10.0, 10.1, 10.2, 10.3])
+        monkeypatch.setattr(serial_io.time, "time", lambda: next(times))
+
+        class TimedPacketPort:
+            def __init__(self):
+                self.timeout = 0.5
+                self.chunks = [
+                    b"RADC" + (3).to_bytes(4, "little"),
+                    b"abc",
+                ]
+
+            def read(self, _size):
+                return self.chunks.pop(0)
+
+        radar = SimpleNamespace(_port=TimedPacketPort())
+        serial_io.install_robust_read_packet(radar)
+
+        reply, payload = radar._read_packet()
+
+        assert reply == "RADC"
+        assert payload == b"abc"
+        assert radar._openflight_last_packet_timing == {
+            "reply": "RADC",
+            "payload_bytes": 3,
+            "read_started_timestamp": 10.0,
+            "arrival_timestamp": 10.1,
+            "header_complete_timestamp": 10.2,
+            "complete_timestamp": 10.3,
+            "read_duration_ms": pytest.approx(200.0),
+            "total_wait_ms": pytest.approx(300.0),
+        }
+
     def test_safe_kld7_destructor_suppresses_close_failures(self):
         from openflight.kld7.serial_io import _install_safe_kld7_destructor
 
@@ -235,6 +278,18 @@ class TestKLD7Types:
         assert frame.radc is None
         frame_with_radc = KLD7Frame(timestamp=1000.0, radc=b"\x00" * 3072)
         assert len(frame_with_radc.radc) == 3072
+
+    def test_kld7_frame_timing_metadata(self):
+        frame = KLD7Frame(
+            timestamp=1000.0,
+            arrival_timestamp=1000.0,
+            complete_timestamp=1000.004,
+            read_duration_ms=4.0,
+        )
+
+        assert frame.arrival_timestamp == 1000.0
+        assert frame.complete_timestamp == 1000.004
+        assert frame.read_duration_ms == 4.0
 
     def test_kld7_angle_vertical(self):
         angle = KLD7Angle(
@@ -312,6 +367,25 @@ class TestKLD7TrackerRingBuffer:
                 "radc_payload_valid": False,
             }
         ]
+
+    def test_snapshot_buffer_includes_frame_timing_metadata(self):
+        tracker = self._make_tracker()
+        tracker._add_frame(
+            KLD7Frame(
+                timestamp=999.9,
+                radc=b"\x00" * 3072,
+                arrival_timestamp=999.9,
+                complete_timestamp=1000.0,
+                read_duration_ms=100.0,
+            )
+        )
+
+        snap = tracker.snapshot_buffer()
+
+        assert snap[0]["timestamp"] == 999.9
+        assert snap[0]["arrival_timestamp"] == 999.9
+        assert snap[0]["complete_timestamp"] == 1000.0
+        assert snap[0]["read_duration_ms"] == 100.0
 
     def test_snapshot_buffer_omits_has_radc_when_no_radc(self):
         tracker = self._make_tracker()

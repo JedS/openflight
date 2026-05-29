@@ -10,6 +10,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Optional
 
+from ..serial_latency import log_usb_serial_latency_timer
 from .radc import RADC_PAYLOAD_BYTES
 from .types import KLD7Angle, KLD7Frame
 
@@ -172,6 +173,7 @@ class KLD7Tracker:
             )
             return False
         resolved_port = _resolved_serial_port(str(port))
+        log_usb_serial_latency_timer(logger, f"KLD7:{self.orientation}", resolved_port)
 
         # The kld7 library always opens at 115200, sends INIT to negotiate
         # up to 3Mbaud, then switches. If a prior session left the K-LD7 at
@@ -340,7 +342,35 @@ class KLD7Tracker:
                         # Validate payload — USB short reads can truncate packets
                         if not isinstance(payload, bytes) or len(payload) != 3072:
                             continue
-                        frame = KLD7Frame(timestamp=time.time())
+                        receive_complete_ts = time.time()
+                        packet_timing = getattr(self._radar, "_openflight_last_packet_timing", {})
+                        arrival_ts = (
+                            packet_timing.get("arrival_timestamp")
+                            if isinstance(packet_timing, dict)
+                            else None
+                        )
+                        complete_ts = (
+                            packet_timing.get("complete_timestamp")
+                            if isinstance(packet_timing, dict)
+                            else None
+                        )
+                        read_duration_ms = (
+                            packet_timing.get("read_duration_ms")
+                            if isinstance(packet_timing, dict)
+                            else None
+                        )
+                        if arrival_ts is None:
+                            arrival_ts = receive_complete_ts
+                        if complete_ts is None:
+                            complete_ts = receive_complete_ts
+                        frame = KLD7Frame(
+                            timestamp=float(arrival_ts),
+                            arrival_timestamp=float(arrival_ts),
+                            complete_timestamp=float(complete_ts),
+                            read_duration_ms=(
+                                float(read_duration_ms) if read_duration_ms is not None else None
+                            ),
+                        )
                         frame.radc = payload
                         self._add_frame(frame)
                         frame_count += 1
@@ -453,7 +483,13 @@ class KLD7Tracker:
         movement cannot influence this shot's angle.
         """
         frames = [
-            {"timestamp": f.timestamp, "radc": f.radc}
+            {
+                "timestamp": f.timestamp,
+                "radc": f.radc,
+                "arrival_timestamp": f.arrival_timestamp,
+                "complete_timestamp": f.complete_timestamp,
+                "read_duration_ms": f.read_duration_ms,
+            }
             for f in self._ring_buffer
             if f.radc is not None
         ]
@@ -709,6 +745,12 @@ class KLD7Tracker:
         frames = []
         for frame in self._ring_buffer:
             entry = {"timestamp": frame.timestamp}
+            if frame.arrival_timestamp is not None:
+                entry["arrival_timestamp"] = frame.arrival_timestamp
+            if frame.complete_timestamp is not None:
+                entry["complete_timestamp"] = frame.complete_timestamp
+            if frame.read_duration_ms is not None:
+                entry["read_duration_ms"] = frame.read_duration_ms
             if frame.radc is not None:
                 entry["has_radc"] = True
                 if include_radc_payload:

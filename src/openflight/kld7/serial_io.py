@@ -54,7 +54,7 @@ def install_robust_read_packet(radar: Any) -> None:
     # the kld7 library is not installed (CI, dev laptops).
     from kld7 import KLD7Exception  # type: ignore[import-not-found]
 
-    def _read_exact(device: Any, n: int) -> bytes:
+    def _read_exact(device: Any, n: int, on_first_chunk: Optional[Any] = None) -> bytes:
         """Read exactly n bytes from the device port, looping over
         partial reads. Returns whatever was actually read if the
         underlying serial.read returns 0 bytes (timeout / EOF).
@@ -62,6 +62,7 @@ def install_robust_read_packet(radar: Any) -> None:
         buf = b""
         remaining = n
         partial_deadline: Optional[float] = None
+        first_chunk_seen = False
         port = device._port
         original_timeout = getattr(port, "timeout", None)
         using_retry_timeout = False
@@ -84,6 +85,10 @@ def install_robust_read_packet(radar: Any) -> None:
                         using_retry_timeout = True
                     time.sleep(0.002)
                     continue
+                if not first_chunk_seen:
+                    first_chunk_seen = True
+                    if on_first_chunk is not None:
+                        on_first_chunk(time.time())
                 buf += chunk
                 remaining -= len(chunk)
                 partial_deadline = None
@@ -109,10 +114,19 @@ def install_robust_read_packet(radar: Any) -> None:
     def _robust_read_packet(device: Any):
         if device._port is None:
             raise KLD7Exception("serial port has been closed")
+        read_started_timestamp = time.time()
+        arrival_timestamp: Optional[float] = None
+
+        def _note_arrival(timestamp: float) -> None:
+            nonlocal arrival_timestamp
+            if arrival_timestamp is None:
+                arrival_timestamp = timestamp
+
         # The 8-byte header itself can be split across USB microframes
         # at 12M USB Full Speed (FTDI), so read it with the same
         # exact-length loop we use for the payload.
-        header = _read_exact(device, 8)
+        header = _read_exact(device, 8, on_first_chunk=_note_arrival)
+        header_complete_timestamp = time.time()
         if len(header) == 0:
             raise KLD7Exception("Timeout waiting for reply")
         if len(header) != 8:
@@ -131,6 +145,18 @@ def install_robust_read_packet(radar: Any) -> None:
                 raise KLD7Exception(f"Short payload read: got {len(payload)} of {length} bytes")
         else:
             payload = None
+        complete_timestamp = time.time()
+        packet_arrival_timestamp = arrival_timestamp or header_complete_timestamp
+        device._openflight_last_packet_timing = {
+            "reply": reply,
+            "payload_bytes": length,
+            "read_started_timestamp": read_started_timestamp,
+            "arrival_timestamp": packet_arrival_timestamp,
+            "header_complete_timestamp": header_complete_timestamp,
+            "complete_timestamp": complete_timestamp,
+            "read_duration_ms": (complete_timestamp - packet_arrival_timestamp) * 1000.0,
+            "total_wait_ms": (complete_timestamp - read_started_timestamp) * 1000.0,
+        }
         return reply, payload
 
     def _robust_get_response(device: Any):

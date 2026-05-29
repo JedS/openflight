@@ -15,6 +15,9 @@ class KLD7Frame:
 
     timestamp: float
     radc: Optional[bytes] = None  # raw 3072-byte ADC payload
+    arrival_timestamp: Optional[float] = None
+    complete_timestamp: Optional[float] = None
+    read_duration_ms: Optional[float] = None
 
 
 @dataclass
