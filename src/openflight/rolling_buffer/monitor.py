@@ -21,17 +21,6 @@ from .types import ProcessedCapture
 
 logger = logging.getLogger("openflight.rolling_buffer.monitor")
 
-# Reconstruct the true ball-contact instant from a hardware-triggered capture
-# for the K-LD7 geometry launch-angle estimator. The first-byte timestamp lags
-# impact by (a) the fixed trigger->first-byte transport delay and (b) the
-# per-shot in-buffer gap between the trigger and where the ball actually sits.
-# The geometry is ~0.08°/ms sensitive, so it needs this corrected instant
-# rather than the raw first-byte time. Constants validated offline against
-# TrackMan sessions (see tvbin_tracker analysis).
-KLD7_FIRST_BYTE_TRIGGER_DELAY_S = 0.068
-KLD7_IMPACT_EXTRA_OFFSET_S = -0.010
-
-
 def get_optimal_spin_for_ball_speed(ball_speed_mph: float, club: ClubType = ClubType.DRIVER) -> float:
     """
     Get optimal spin rate for a given ball speed.
@@ -771,6 +760,9 @@ class RollingBufferMonitor:
                 if capture.trigger_timestamp is not None
                 else capture.first_byte_timestamp
             )
+            # The sound-trigger timestamp is the trusted ball-contact instant.
+            # OPS ball_timestamp_ms marks where the radar speed return was found
+            # inside the capture; it should not redefine geometry t=0.
             impact_timestamp_kld7 = impact_timestamp
 
         # Create shot with extended fields

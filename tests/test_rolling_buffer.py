@@ -810,6 +810,21 @@ class TestRollingBufferMonitorSpinPlausibility:
         assert "plausibility floor" in shot.spin_rejection_reason
         assert shot.impact_timestamp == pytest.approx(12345.678)
 
+    def test_kld7_impact_timestamp_uses_hardware_trigger_timestamp(self):
+        """K-LD7 geometry should use the trusted sound-trigger impact time."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="manual")
+        processed = self._processed_with_spin(
+            SpinResult(spin_rpm=0, confidence=0.0, snr=0.0, quality="none")
+        )
+
+        shot = monitor._create_shot(processed)
+
+        assert shot is not None
+        assert shot.impact_timestamp == pytest.approx(12345.678)
+        assert shot.impact_timestamp_kld7 == pytest.approx(12345.678)
+
     def test_lower_rail_driver_spin_kept_diagnostic_only(self):
         """Rail picks should be logged but not exposed as measured spin."""
         from openflight.rolling_buffer import RollingBufferMonitor
