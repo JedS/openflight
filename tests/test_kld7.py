@@ -891,6 +891,156 @@ class TestRADCAngleExtraction:
         assert results[0]["estimator"] == "geometry"
         assert abs(results[0]["launch_angle_deg"] - alpha_true) < 3.0
 
+    def test_geometry_estimator_uses_low_confidence_single_frame_fallback(self):
+        """One strong OPS-bin frame can still produce a bounded geometry fallback."""
+        from openflight.kld7.radc import extract_launch_angle, predicted_bearing_deg
+
+        ball_speed_mph = 72.0
+        ball_kmh = ball_speed_mph * 1.609
+        aliased_kmh = ball_kmh % 200.0
+        if aliased_kmh > 100.0:
+            aliased_kmh -= 200.0
+
+        v, d, mount, alpha_true = ball_speed_mph, 5.5, 18.0, 16.0
+        impact_ts = time.time()
+        flight_time = 0.056
+        quiet = self._make_quiet_radc_payload()
+        frames = [{"timestamp": impact_ts - (6 - i) * 0.056, "radc": quiet} for i in range(6)]
+
+        beta = predicted_bearing_deg(alpha_true, flight_time, v, d, mount)
+        radc = self._make_radc_payload_with_tone(
+            aliased_kmh,
+            angle_deg=-beta,
+            amplitude=20000,
+        )
+        frames.append({"timestamp": impact_ts + flight_time, "radc": radc})
+
+        results = extract_launch_angle(
+            frames,
+            ops243_ball_speed_mph=ball_speed_mph,
+            orientation="vertical",
+            vertical_estimator="geometry",
+            shot_timestamp=impact_ts,
+            mount_deg=mount,
+            distance_ft=d,
+        )
+
+        assert results
+        best = results[0]
+        assert best["estimator"] == "geometry_single_frame"
+        assert best["geom_fit_rmse_deg"] is None
+        assert best["geom_single_frame_resid_deg"] is not None
+        assert best["confidence"] < 0.8
+        assert abs(best["launch_angle_deg"] - alpha_true) < 3.0
+
+    def test_vertical_rules_can_pair_strong_anchor_with_weak_rising_neighbor(self):
+        """A good OPS-bin anchor can use an adjacent weaker frame when it rises."""
+        from openflight.kld7.radc import (
+            VERTICAL_RULE_WEAK_ADJACENT_SNR_FLOOR,
+            _select_vertical_candidates_with_rules,
+            _VerticalFrameCandidate,
+        )
+
+        anchor = _VerticalFrameCandidate(
+            frame_index=10,
+            peak_bin=1935,
+            bin_error=2,
+            snr_linear=10.0,
+            angle_deg=7.0,
+            speed_mph=117.0,
+            raw_angle_deg=7.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.038,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+        )
+        weak_next = _VerticalFrameCandidate(
+            frame_index=11,
+            peak_bin=1928,
+            bin_error=9,
+            snr_linear=VERTICAL_RULE_WEAK_ADJACENT_SNR_FLOOR + 0.1,
+            angle_deg=11.0,
+            speed_mph=117.0,
+            raw_angle_deg=11.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.071,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+            ops_anchor_weak=True,
+        )
+
+        selected = _select_vertical_candidates_with_rules([anchor, weak_next])
+
+        assert [frame.frame_index for frame in selected] == [10, 11]
+
+    def test_vertical_rules_require_strong_anchor_for_weak_adjacent_frames(self):
+        """Weak OPS-bin frames alone are not enough to start a geometry fit."""
+        from openflight.kld7.radc import (
+            VERTICAL_RULE_WEAK_ADJACENT_SNR_FLOOR,
+            _select_vertical_candidates_with_rules,
+            _VerticalFrameCandidate,
+        )
+
+        weak_frames = [
+            _VerticalFrameCandidate(
+                frame_index=10 + idx,
+                peak_bin=1935 - idx,
+                bin_error=idx + 1,
+                snr_linear=VERTICAL_RULE_WEAK_ADJACENT_SNR_FLOOR + 0.1,
+                angle_deg=5.0 + idx,
+                speed_mph=117.0,
+                raw_angle_deg=5.0 + idx,
+                geom_bearing_deg=0.0,
+                t_after_impact_s=0.040 + idx * 0.030,
+                phase_coherence=0.99,
+                peak_width_bins=5,
+                ops_anchor_weak=True,
+            )
+            for idx in range(2)
+        ]
+
+        assert _select_vertical_candidates_with_rules(weak_frames) == []
+
+    def test_vertical_rules_reject_weak_neighbor_when_bearing_is_not_rising(self):
+        """A weak adjacent frame must still follow the rising-ball bearing rule."""
+        from openflight.kld7.radc import (
+            VERTICAL_RULE_WEAK_ADJACENT_SNR_FLOOR,
+            _select_vertical_candidates_with_rules,
+            _VerticalFrameCandidate,
+        )
+
+        anchor = _VerticalFrameCandidate(
+            frame_index=10,
+            peak_bin=1935,
+            bin_error=2,
+            snr_linear=10.0,
+            angle_deg=7.0,
+            speed_mph=117.0,
+            raw_angle_deg=7.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.038,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+        )
+        weak_next = _VerticalFrameCandidate(
+            frame_index=11,
+            peak_bin=1928,
+            bin_error=9,
+            snr_linear=VERTICAL_RULE_WEAK_ADJACENT_SNR_FLOOR + 0.1,
+            angle_deg=3.0,
+            speed_mph=117.0,
+            raw_angle_deg=3.0,
+            geom_bearing_deg=0.0,
+            t_after_impact_s=0.071,
+            phase_coherence=0.99,
+            peak_width_bins=5,
+            ops_anchor_weak=True,
+        )
+
+        selected = _select_vertical_candidates_with_rules([anchor, weak_next])
+
+        assert [frame.frame_index for frame in selected] == [10]
+
     def test_geometry_estimator_falls_back_to_naive_without_impact_time(self):
         """Without a shot_timestamp the geometry cannot run; it must fall back."""
         from openflight.kld7.radc import extract_launch_angle
