@@ -1281,6 +1281,87 @@ class TestOnShotDetected:
             "geom_fit_rmse_deg": 0.64,
         }
 
+    def test_near_threshold_vertical_kld7_angle_displays_as_low_confidence_radar(
+        self, monkeypatch
+    ):
+        """A plausible near-threshold radar candidate should show instead of estimate."""
+
+        class StubTracker:
+            orientation = "vertical"
+
+            def snapshot_buffer(self):
+                return [{"timestamp": 1234.5, "has_radc": True}]
+
+            def get_angle_for_shot(
+                self,
+                shot_timestamp=None,
+                ball_speed_mph=None,
+                impact_timestamp=None,
+            ):
+                return KLD7Angle(
+                    vertical_deg=19.9,
+                    confidence=0.67,
+                    num_frames=1,
+                    radc_selection={
+                        "estimator": "geometry_single_frame",
+                        "selection_path": "geometry_single_frame",
+                        "selected_frame_indices": [40],
+                        "selected_t_ms": [79.4],
+                        "selected_bin_errors": [5],
+                    },
+                )
+
+            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
+                return None
+
+            def reset(self):
+                return None
+
+        logged_buffers = []
+
+        class StubSessionLogger:
+            @property
+            def stats(self):
+                return {"shots_detected": 0}
+
+            def log_kld7_buffer(self, **kwargs):
+                logged_buffers.append(kwargs)
+
+            def log_shot(self, **kwargs):
+                return None
+
+        monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+        shot = Shot(
+            ball_speed_mph=100.9,
+            club_speed_mph=67.7,
+            timestamp=datetime.now(),
+            club=ClubType.IRON_7,
+        )
+
+        on_shot_detected(shot)
+
+        assert shot.launch_angle_vertical == pytest.approx(19.9)
+        assert shot.launch_angle_vertical_source == "radar"
+        assert shot.launch_angle_confidence == pytest.approx(0.67)
+        assert shot.angle_source == "radar"
+        assert logged_buffers[0]["ball_angle"]["selection_reason"] == "low_confidence_accept"
+        assert logged_buffers[0]["ball_angle"]["acceptance_path"] == "low_confidence"
+        assert logged_buffers[0]["ball_angle"]["radc_selection"] == {
+            "estimator": "geometry_single_frame",
+            "selection_path": "geometry_single_frame",
+            "selected_frame_indices": [40],
+            "selected_t_ms": [79.4],
+            "selected_bin_errors": [5],
+        }
+
     def test_low_confidence_vertical_kld7_angle_rejects_estimator_outlier(self, monkeypatch):
         """Soft acceptance should not admit high-angle lane picks from the same session."""
 

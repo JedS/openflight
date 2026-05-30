@@ -351,7 +351,11 @@ def _select_vertical_radar_launch(kld7_angle, shot: Shot) -> tuple[bool, dict]:
     High-confidence candidates keep the existing production behavior. Marginal
     candidates get a stricter second pass: they must agree with the launch
     estimator, sit inside a club-family lane, and avoid very long frame spans
-    that often indicate clutter rather than the ball transit.
+    that often indicate clutter rather than the ball transit. Very low
+    confidence candidates are still rejected, but near-threshold candidates
+    that pass every other guard are allowed through so the UI can show them as
+    low-confidence radar measurements instead of silently replacing them with
+    the launch estimator.
     """
     details = {
         "accepted": False,
@@ -359,6 +363,7 @@ def _select_vertical_radar_launch(kld7_angle, shot: Shot) -> tuple[bool, dict]:
         "acceptance_path": None,
         "strict_min_confidence": _MIN_VERTICAL_RADAR_CONFIDENCE,
         "soft_min_confidence": _MIN_VERTICAL_SOFT_RADAR_CONFIDENCE,
+        "low_confidence_min_confidence": _MIN_VERTICAL_LOW_CONFIDENCE_RADAR_CONFIDENCE,
         "soft_allowed_delta_deg": _VERTICAL_SOFT_ESTIMATE_DELTA_DEG,
         "soft_max_frame_count": _VERTICAL_SOFT_MAX_FRAME_COUNT,
     }
@@ -384,7 +389,7 @@ def _select_vertical_radar_launch(kld7_angle, shot: Shot) -> tuple[bool, dict]:
         details["acceptance_path"] = "strict"
         return True, details
 
-    if kld7_angle.confidence < _MIN_VERTICAL_SOFT_RADAR_CONFIDENCE:
+    if kld7_angle.confidence < _MIN_VERTICAL_LOW_CONFIDENCE_RADAR_CONFIDENCE:
         details["selection_reason"] = "low_confidence"
         return False, details
 
@@ -416,8 +421,12 @@ def _select_vertical_radar_launch(kld7_angle, shot: Shot) -> tuple[bool, dict]:
         return False, details
 
     details["accepted"] = True
-    details["selection_reason"] = "soft_accept"
-    details["acceptance_path"] = "soft"
+    if kld7_angle.confidence >= _MIN_VERTICAL_SOFT_RADAR_CONFIDENCE:
+        details["selection_reason"] = "soft_accept"
+        details["acceptance_path"] = "soft"
+    else:
+        details["selection_reason"] = "low_confidence_accept"
+        details["acceptance_path"] = "low_confidence"
     return True, details
 
 
@@ -540,6 +549,7 @@ _KLD7_BUFFER_UNDERFILL_FRAC = 0.5
 _KLD7_POST_SHOT_CAPTURE_DELAY_S = 0.18
 _MIN_VERTICAL_RADAR_CONFIDENCE = 0.80
 _MIN_VERTICAL_SOFT_RADAR_CONFIDENCE = 0.68
+_MIN_VERTICAL_LOW_CONFIDENCE_RADAR_CONFIDENCE = 0.65
 _VERTICAL_SOFT_ESTIMATE_DELTA_DEG = 4.5
 _VERTICAL_SOFT_MAX_FRAME_COUNT = 40
 _VERTICAL_SOFT_TIGHT_DELTA_FOR_LONG_FRAME_DEG = 2.0
