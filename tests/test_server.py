@@ -1210,8 +1210,25 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return [{"timestamp": 1234.5, "has_radc": True}]
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
-                return KLD7Angle(vertical_deg=19.9, confidence=0.69, num_frames=10)
+            def get_angle_for_shot(
+                self,
+                shot_timestamp=None,
+                ball_speed_mph=None,
+                impact_timestamp=None,
+            ):
+                return KLD7Angle(
+                    vertical_deg=19.9,
+                    confidence=0.69,
+                    num_frames=10,
+                    radc_selection={
+                        "estimator": "geometry",
+                        "selection_path": "geometry_primary",
+                        "selected_frame_indices": [39, 40],
+                        "selected_t_ms": [21.1, 56.3],
+                        "selected_bin_errors": [19, 2],
+                        "geom_fit_rmse_deg": 0.64,
+                    },
+                )
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
                 return None
@@ -1255,6 +1272,14 @@ class TestOnShotDetected:
         assert shot.launch_angle_confidence == pytest.approx(0.69)
         assert shot.angle_source == "radar"
         assert logged_buffers[0]["ball_angle"]["selection_reason"] == "soft_accept"
+        assert logged_buffers[0]["ball_angle"]["radc_selection"] == {
+            "estimator": "geometry",
+            "selection_path": "geometry_primary",
+            "selected_frame_indices": [39, 40],
+            "selected_t_ms": [21.1, 56.3],
+            "selected_bin_errors": [19, 2],
+            "geom_fit_rmse_deg": 0.64,
+        }
 
     def test_low_confidence_vertical_kld7_angle_rejects_estimator_outlier(self, monkeypatch):
         """Soft acceptance should not admit high-angle lane picks from the same session."""
@@ -1265,7 +1290,7 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return [{"timestamp": 1234.5, "has_radc": True}]
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
+            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, **kwargs):
                 return KLD7Angle(vertical_deg=27.8, confidence=0.75, num_frames=32)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1452,7 +1477,7 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return [{"timestamp": 1234.5, "has_radc": True}]
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
+            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, **kwargs):
                 return KLD7Angle(horizontal_deg=-2.2, confidence=0.34, num_frames=8)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1505,7 +1530,7 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return [{"timestamp": 1234.5, "has_radc": True}]
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
+            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, **kwargs):
                 return KLD7Angle(horizontal_deg=-8.1, confidence=0.34, num_frames=8)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
@@ -1558,7 +1583,7 @@ class TestOnShotDetected:
             def snapshot_buffer(self):
                 return [{"timestamp": 1234.5, "has_radc": True}]
 
-            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None):
+            def get_angle_for_shot(self, shot_timestamp=None, ball_speed_mph=None, **kwargs):
                 return KLD7Angle(horizontal_deg=13.9, confidence=0.66, num_frames=2)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):

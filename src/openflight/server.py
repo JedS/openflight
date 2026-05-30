@@ -689,6 +689,9 @@ def _kld7_angle_log_payload(
         "frames_available": angle.frames_available,
         "frames_ignored_stale": angle.frames_ignored_stale,
     }
+    radc_selection = getattr(angle, "radc_selection", None)
+    if radc_selection:
+        payload["radc_selection"] = radc_selection
     if selection_details:
         payload.update(selection_details)
     return payload

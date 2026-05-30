@@ -1426,6 +1426,53 @@ class TestRADCAngleExtraction:
         assert result.frames_available == 2
         assert result.frames_ignored_stale == 0
 
+    def test_get_angle_for_shot_preserves_radc_selection_diagnostics(self, monkeypatch):
+        """Session logging needs the exact selector path and frames used by RADC."""
+        tracker = self._make_tracker()
+        tracker.angle_offset_deg = 2.5
+        tracker._add_frame(KLD7Frame(timestamp=1000.0, radc=b"a"))
+
+        def fake_extract_launch_angle(frames, **kwargs):
+            return [
+                {
+                    "launch_angle_deg": 18.2,
+                    "ball_speed_mph": 101.0,
+                    "avg_snr_db": 12.4,
+                    "confidence": 0.91,
+                    "frame_count": 2,
+                    "estimator": "geometry",
+                    "selection_path": "geometry_primary",
+                    "selected_frame_indices": [39, 40],
+                    "selected_t_ms": [25.5, 60.4],
+                    "selected_bin_errors": [1, 2],
+                    "geom_fit_rmse_deg": 0.66,
+                    "geom_single_frame_resid_deg": None,
+                    "weak_adjacent_frame_used": False,
+                    "raw_angle_deg": 15.7,
+                    "angle_offset_deg": 2.5,
+                    "spectrum_source": "f1a",
+                    "detection_count": 5,
+                    "angle_std_deg": 2.9,
+                    "impact_frames": [38, 39, 40],
+                }
+            ]
+
+        monkeypatch.setattr(
+            "openflight.kld7.radc.extract_launch_angle",
+            fake_extract_launch_angle,
+        )
+
+        result = tracker.get_angle_for_shot(ball_speed_mph=101.0)
+
+        assert result is not None
+        assert result.radc_selection["estimator"] == "geometry"
+        assert result.radc_selection["selection_path"] == "geometry_primary"
+        assert result.radc_selection["selected_frame_indices"] == [39, 40]
+        assert result.radc_selection["selected_t_ms"] == [25.5, 60.4]
+        assert result.radc_selection["selected_bin_errors"] == [1, 2]
+        assert result.radc_selection["geom_fit_rmse_deg"] == pytest.approx(0.66)
+        assert result.radc_selection["relaxed_retry"] is False
+
     def test_angle_offset_applied_to_radc(self):
         """Angle offset should be applied to RADC-extracted angle."""
         tracker = self._make_tracker()

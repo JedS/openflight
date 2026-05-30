@@ -1,7 +1,7 @@
 """Data types for K-LD7 angle radar integration."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -35,3 +35,4 @@ class KLD7Angle:
     frames_examined: int = 0
     frames_available: int = 0
     frames_ignored_stale: int = 0
+    radc_selection: Optional[dict[str, Any]] = None

@@ -16,6 +16,38 @@ from .types import KLD7Angle, KLD7Frame
 
 logger = logging.getLogger(__name__)
 
+_RADC_SELECTION_DIAGNOSTIC_KEYS = (
+    "estimator",
+    "selection_path",
+    "selected_frame_indices",
+    "selected_t_ms",
+    "selected_bin_errors",
+    "geom_fit_rmse_deg",
+    "geom_single_frame_resid_deg",
+    "weak_adjacent_frame_used",
+    "raw_angle_deg",
+    "angle_offset_deg",
+    "spectrum_source",
+    "ball_speed_mph",
+    "avg_snr_db",
+    "angle_std_deg",
+    "detection_count",
+    "frame_count",
+    "impact_frames",
+    "confidence",
+)
+
+
+def _radc_selection_diagnostics(best: dict, *, relaxed_retry: bool) -> dict:
+    """Return compact, JSON-safe RADC selection details for session replay."""
+    diagnostics = {
+        key: best.get(key)
+        for key in _RADC_SELECTION_DIAGNOSTIC_KEYS
+        if key in best
+    }
+    diagnostics["relaxed_retry"] = relaxed_retry
+    return diagnostics
+
 
 def _is_recoverable_stream_error(error: BaseException) -> bool:
     """Return True for transient serial failures seen during live K-LD7 streaming."""
@@ -630,6 +662,10 @@ class KLD7Tracker:
         best = dict(select_best_shot_result(results))
         if relaxed_retry:
             best["confidence"] = min(float(best.get("confidence", 0.0)), 0.45)
+        radc_selection = _radc_selection_diagnostics(
+            best,
+            relaxed_retry=relaxed_retry,
+        )
         logger.info(
             "[KLD7] RADC: angle=%.1f° speed=%.1f mph snr=%.1f conf=%.2f frames=%d "
             "est=%s path=%s selected_frames=%s selected_t_ms=%s fit_rmse=%s",
@@ -656,6 +692,7 @@ class KLD7Tracker:
                 frames_ignored_stale=frames_ignored_stale,
                 magnitude=best["avg_snr_db"],
                 detection_class="ball",
+                radc_selection=radc_selection,
             )
         return KLD7Angle(
             vertical_deg=None,
@@ -667,6 +704,7 @@ class KLD7Tracker:
             frames_ignored_stale=frames_ignored_stale,
             magnitude=best["avg_snr_db"],
             detection_class="ball",
+            radc_selection=radc_selection,
         )
 
     def get_angle_for_shot(
