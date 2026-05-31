@@ -27,7 +27,6 @@ KLD7_ANGLE_OFFSET=""
 KLD7_HORIZONTAL=false
 KLD7_HORIZONTAL_PORT=""
 KLD7_HORIZONTAL_OFFSET=""
-EXPERIMENTAL_KLD7_TRACKMAN_CALIBRATION=false
 EXPERIMENTAL_KLD7_RAW_RADC_LOGGING=false
 EXPERIMENTAL_KLD7_RADC_TUNING=false
 EXPERIMENTAL_KLD7_SPEED_TOLERANCE=""
@@ -130,10 +129,6 @@ while [[ $# -gt 0 ]]; do
         --kld7-horizontal-offset)
             KLD7_HORIZONTAL_OFFSET="$2"
             shift 2
-            ;;
-        --experimental-kld7-trackman-calibration)
-            EXPERIMENTAL_KLD7_TRACKMAN_CALIBRATION=true
-            shift
             ;;
         --experimental-kld7-raw-radc-logging)
             EXPERIMENTAL_KLD7_RAW_RADC_LOGGING=true
@@ -270,10 +265,6 @@ fi
 
 if [ -n "$SESSION_LOCATION" ]; then
     SERVER_CMD="$SERVER_CMD --session-location $SESSION_LOCATION"
-fi
-
-if [ "$EXPERIMENTAL_KLD7_TRACKMAN_CALIBRATION" = true ]; then
-    SERVER_CMD="$SERVER_CMD --experimental-kld7-trackman-calibration"
 fi
 
 if [ "$EXPERIMENTAL_KLD7_RAW_RADC_LOGGING" = true ]; then

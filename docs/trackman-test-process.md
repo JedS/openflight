@@ -135,30 +135,9 @@ The comparison script reports per-club bias and writes row-level deltas for:
 - spin
 - carry
 
-For saved-angle calibration checks, use the evaluator but treat the exact
-historical pass as an acceptance fixture, not proof of future-shot accuracy:
-
-```bash
-uv run --no-sync python scripts/analysis/evaluate_kld7_trackman_calibration.py \
-  --comparison session_logs/comparison_20260506.csv \
-  --comparison session_logs/comparison_test2.csv \
-  --summary-output session_logs/kld7_calibration_summary.json \
-  --require-within-limit
-```
-
-The output includes exact replay, leave-one-out, per-axis leave-one-out,
-source-holdout metrics, and source-holdout baselines. Source-holdout trains on
-one comparison CSV and tests on the other, so it is the better warning signal
-for whether the empirical calibration will transfer to the next TrackMan
-session. The baselines compare the empirical correction with raw saved K-LD7
-angles and a simple axis/club TrackMan mean; if the correction cannot beat those
-baselines, the saved-angle data is not strong enough to justify changing the
-live signal path without raw RADC replay.
-
-To make that transfer check a hard gate, add `--require-source-holdout`. The
-current two saved-angle sessions are expected to fail this stricter gate; that is
-why raw RADC replay from a new `--trackman-test` session is still required before
-calling the K-LD7 signal-processing path ready.
+Historical saved-angle comparisons are useful for spotting bias, but they are
+not enough to justify changing the live K-LD7 path because they lack raw RADC
+payloads. Use new `--trackman-test` sessions for signal-processing validation.
 
 It also includes OpenFlight spin diagnostics when present:
 

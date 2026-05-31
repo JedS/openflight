@@ -813,7 +813,7 @@ def radc_frame_diagnostics(
         warnings.append("low_phase_coherence")
     if bin_error is not None and bin_error > ops_bin_warn_tol:
         warnings.append("far_from_ops_bin")
-    if orientation == "vertical" and not (0.0 <= angle_centroid <= 45.0):
+    if orientation == "vertical" and (angle_centroid < 0.0 or angle_centroid > 45.0):
         warnings.append("outside_vertical_bounds")
     if orientation == "horizontal" and abs(angle_centroid) > 15.0:
         warnings.append("outside_horizontal_bounds")
@@ -1310,7 +1310,7 @@ def extract_launch_angle(
         # reach the Shot object. Orientation-aware: vertical [0°, 45°],
         # horizontal [-15°, +15°]. When orientation is None (offline
         # analysis), skip bounds filtering.
-        if orientation == "vertical" and not (0.0 <= corrected_angle <= 45.0):
+        if orientation == "vertical" and (corrected_angle < 0.0 or corrected_angle > 45.0):
             logger.info(
                 "[RADC] Vertical angle %.1f° outside [0, 45] — rejected",
                 corrected_angle,

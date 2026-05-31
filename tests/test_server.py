@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from openflight import server as server_module
-from openflight.kld7.trackman_calibration import CALIBRATION_MODEL_NAME
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
 from openflight.server import (
@@ -111,29 +110,22 @@ class TestKLD7Initialization:
         }
 
     @pytest.mark.parametrize(
-        ("raw_logging_enabled", "trackman_enabled", "radc_tuning_enabled", "expected"),
+        ("raw_logging_enabled", "radc_tuning_enabled", "expected"),
         [
-            (False, False, False, False),
-            (True, False, False, True),
-            (False, True, False, True),
-            (False, False, True, True),
-            (True, True, True, True),
+            (False, False, False),
+            (True, False, True),
+            (False, True, True),
+            (True, True, True),
         ],
     )
     def test_raw_radc_logging_enabled_for_any_kld7_experiment(
         self,
         monkeypatch,
         raw_logging_enabled,
-        trackman_enabled,
         radc_tuning_enabled,
         expected,
     ):
         """Any K-LD7 experiment path should preserve raw RADC for replay."""
-        monkeypatch.setattr(
-            server_module,
-            "experimental_kld7_trackman_calibration",
-            trackman_enabled,
-        )
         monkeypatch.setattr(
             server_module,
             "experimental_kld7_raw_radc_logging",
@@ -156,7 +148,6 @@ class TestKLD7Initialization:
             "radc_horizontal_retry_impact_energy_threshold": 0.35,
             "radc_horizontal_angle_limit_deg": 30.0,
         }
-        monkeypatch.setattr(server_module, "experimental_kld7_trackman_calibration", True)
         monkeypatch.setattr(server_module, "experimental_kld7_raw_radc_logging", True)
         monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", True)
         monkeypatch.setattr(server_module, "active_kld7_radc_tuning", tuning)
@@ -165,8 +156,8 @@ class TestKLD7Initialization:
 
         assert config["min_speed"] == server_module.radar_config["min_speed"]
         assert config["kld7_experiments"] == {
-            "trackman_calibration_enabled": True,
-            "trackman_calibration_model": CALIBRATION_MODEL_NAME,
+            "trackman_calibration_enabled": False,
+            "trackman_calibration_model": None,
             "raw_radc_payload_logging_enabled": True,
             "raw_radc_payload_logging_requested": True,
             "radc_tuning_enabled": True,
@@ -199,14 +190,13 @@ class TestKLD7Initialization:
         monkeypatch.setattr(server_module, "camera", None)
         monkeypatch.setattr(server_module, "camera_tracker", None)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: FakeSessionLogger())
-        monkeypatch.setattr(server_module, "experimental_kld7_trackman_calibration", True)
         monkeypatch.setattr(server_module, "experimental_kld7_raw_radc_logging", True)
         monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", True)
         monkeypatch.setattr(server_module, "active_kld7_radc_tuning", tuning)
 
         server_module.start_monitor(mock=True, trigger_type="sound")
 
-        assert started["config"]["kld7_experiments"]["trackman_calibration_enabled"] is True
+        assert started["config"]["kld7_experiments"]["trackman_calibration_enabled"] is False
         assert started["config"]["kld7_experiments"]["raw_radc_payload_logging_enabled"] is True
         assert started["config"]["kld7_experiments"]["raw_radc_payload_logging_requested"] is True
         assert started["config"]["kld7_experiments"]["radc_tuning_params"] == tuning
@@ -1002,7 +992,6 @@ class TestOnShotDetected:
         monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
-        monkeypatch.setattr(server_module, "experimental_kld7_trackman_calibration", False)
         monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", True)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
         monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
@@ -1055,7 +1044,7 @@ class TestOnShotDetected:
         monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
-        monkeypatch.setattr(server_module, "experimental_kld7_trackman_calibration", True)
+        monkeypatch.setattr(server_module, "experimental_kld7_raw_radc_logging", True)
         monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
         monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)

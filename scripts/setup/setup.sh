@@ -108,9 +108,8 @@ fi
 # Create virtual environment
 log "Creating Python virtual environment..."
 if [ "$PLATFORM" == "pi" ]; then
-    # On Pi, use system-site-packages for picamera2
-    python3 -m venv .venv --system-site-packages
-    log "Created venv with system-site-packages (for picamera2)"
+    python3 -m venv .venv
+    log "Created venv"
 else
     python3 -m venv .venv
     log "Created venv"
@@ -125,21 +124,12 @@ log "Installing Python dependencies..."
 if command -v uv &> /dev/null; then
     uv pip install -e ".[ui,analysis]"
 
-    # Install camera dependencies on Pi or if requested
-    if [ "$PLATFORM" == "pi" ]; then
-        log "Installing camera dependencies for Raspberry Pi..."
-        # Install libcap-dev for picamera2 if not present
-        if ! dpkg -s libcap-dev &> /dev/null 2>&1; then
-            warn "Installing libcap-dev (requires sudo)..."
-            sudo apt install -y libcap-dev
-        fi
-        uv pip install -e ".[camera]"
-    fi
+    # Camera dependencies are disabled for the radar-only production path.
+    # If camera support returns, re-enable the optional camera extra in
+    # pyproject.toml and restore installation here.
 else
     pip install -e ".[ui,analysis]"
-    if [ "$PLATFORM" == "pi" ]; then
-        pip install -e ".[camera]"
-    fi
+    # Camera dependencies are disabled for the radar-only production path.
 fi
 log "Python dependencies installed ✓"
 

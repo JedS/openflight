@@ -65,7 +65,6 @@ debug_log_path: Optional[Path] = None
 # K-LD7 angle radars (vertical = launch angle, horizontal = club path)
 kld7_vertical = None
 kld7_horizontal = None
-experimental_kld7_trackman_calibration: bool = False
 experimental_kld7_radc_tuning: bool = False
 experimental_kld7_raw_radc_logging: bool = False
 
@@ -395,7 +394,7 @@ def _select_vertical_radar_launch(kld7_angle, shot: Shot) -> tuple[bool, dict]:
     lane_min, lane_max = _vertical_soft_launch_lane_deg(shot.club)
     details["soft_lane_min_deg"] = lane_min
     details["soft_lane_max_deg"] = lane_max
-    if not (lane_min <= radar_angle_deg <= lane_max):
+    if radar_angle_deg < lane_min or radar_angle_deg > lane_max:
         details["selection_reason"] = "outside_soft_lane"
         return False, details
 
@@ -673,8 +672,6 @@ def _warn_if_kld7_snapshot_lacks_post_shot_frames(
 def _kld7_angle_log_payload(
     angle,
     axis_field: str,
-    raw_angle_deg: Optional[float] = None,
-    calibration_details: Optional[dict] = None,
     selection_details: Optional[dict] = None,
 ) -> Optional[dict]:
     """Build the compact K-LD7 angle payload used in session logs."""
@@ -691,95 +688,14 @@ def _kld7_angle_log_payload(
         "frames_available": angle.frames_available,
         "frames_ignored_stale": angle.frames_ignored_stale,
     }
-    if experimental_kld7_trackman_calibration and raw_angle_deg is not None:
-        from openflight.kld7.trackman_calibration import CALIBRATION_MODEL_NAME
-
-        raw_key = f"raw_{axis_field}"
-        calibrated_key = f"calibrated_{axis_field}"
-        payload[raw_key] = raw_angle_deg
-        payload[calibrated_key] = getattr(angle, axis_field)
-        payload["calibration_model"] = CALIBRATION_MODEL_NAME
-        if calibration_details:
-            payload["calibration_details"] = calibration_details
     if selection_details:
         payload.update(selection_details)
     return payload
 
 
-def _calibrate_experimental_kld7_trackman_angle(
-    *,
-    axis: str,
-    angle_deg: float,
-    club: ClubType,
-    ball_speed_mph: float,
-    club_speed_mph: Optional[float],
-) -> tuple[float, Optional[dict]]:
-    """Apply the disabled-by-default TrackMan K-LD7 correction with metadata."""
-    if not experimental_kld7_trackman_calibration:
-        return angle_deg, None
-
-    from openflight.kld7.trackman_calibration import (
-        CALIBRATION_MODEL_NAME,
-        calibrate_angle_with_metadata,
-    )
-
-    result = calibrate_angle_with_metadata(
-        axis=axis,
-        raw_angle_deg=angle_deg,
-        club=club,
-        ball_speed_mph=ball_speed_mph,
-        club_speed_mph=club_speed_mph,
-    )
-    corrected = result.angle_deg
-    logger.info(
-        "[SERVER] Experimental K-LD7 TrackMan calibration (%s, %s): %.1f° -> %.1f° "
-        "(nearest=%s/%s, distance=%s)",
-        axis,
-        result.decision,
-        angle_deg,
-        corrected,
-        result.nearest_session,
-        result.nearest_shot_number,
-        None if result.nearest_distance is None else round(result.nearest_distance, 3),
-    )
-    details = {
-        "decision": result.decision,
-        "nearest_distance": result.nearest_distance,
-        "nearest_session": result.nearest_session,
-        "nearest_shot_number": result.nearest_shot_number,
-        "nearest_axis": result.nearest_axis,
-        "nearest_club": result.nearest_club,
-        "model": CALIBRATION_MODEL_NAME,
-    }
-    return corrected, details
-
-
-def _apply_experimental_kld7_trackman_calibration(
-    *,
-    axis: str,
-    angle_deg: float,
-    club: ClubType,
-    ball_speed_mph: float,
-    club_speed_mph: Optional[float],
-) -> float:
-    """Apply the disabled-by-default TrackMan K-LD7 correction."""
-    corrected, _ = _calibrate_experimental_kld7_trackman_angle(
-        axis=axis,
-        angle_deg=angle_deg,
-        club=club,
-        ball_speed_mph=ball_speed_mph,
-        club_speed_mph=club_speed_mph,
-    )
-    return corrected
-
-
 def _experimental_kld7_raw_radc_logging_enabled() -> bool:
     """Return whether K-LD7 buffers should include raw RADC payloads."""
-    return (
-        experimental_kld7_raw_radc_logging
-        or experimental_kld7_trackman_calibration
-        or experimental_kld7_radc_tuning
-    )
+    return experimental_kld7_raw_radc_logging or experimental_kld7_radc_tuning
 
 
 def _kld7_radc_tuning_kwargs(args) -> dict:
@@ -812,15 +728,9 @@ def _kld7_radc_tuning_kwargs(args) -> dict:
 def _session_start_config() -> dict:
     """Return session-start config including experimental K-LD7 provenance."""
     config = radar_config.copy()
-    if experimental_kld7_trackman_calibration:
-        from openflight.kld7.trackman_calibration import CALIBRATION_MODEL_NAME
-
-        calibration_model = CALIBRATION_MODEL_NAME
-    else:
-        calibration_model = None
     config["kld7_experiments"] = {
-        "trackman_calibration_enabled": experimental_kld7_trackman_calibration,
-        "trackman_calibration_model": calibration_model,
+        "trackman_calibration_enabled": False,
+        "trackman_calibration_model": None,
         "raw_radc_payload_logging_enabled": _experimental_kld7_raw_radc_logging_enabled(),
         "raw_radc_payload_logging_requested": experimental_kld7_raw_radc_logging,
         "radc_tuning_enabled": experimental_kld7_radc_tuning,
@@ -1146,7 +1056,7 @@ def generate_mjpeg():
             frame = latest_frame
 
         if frame:
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
         else:
             time.sleep(0.03)
 
@@ -1567,24 +1477,8 @@ def on_shot_detected(shot: Shot):
                     shot_timestamp=shot_ts,
                     ball_speed_mph=shot.ball_speed_mph,
                 )
-                raw_vertical_angle_deg = (
-                    kld7_angle.vertical_deg
-                    if kld7_angle and kld7_angle.vertical_deg is not None
-                    else None
-                )
-                vertical_calibration_details = None
                 vertical_selection_details = None
                 if kld7_angle and kld7_angle.vertical_deg is not None:
-                    (
-                        kld7_angle.vertical_deg,
-                        vertical_calibration_details,
-                    ) = _calibrate_experimental_kld7_trackman_angle(
-                        axis="v",
-                        angle_deg=kld7_angle.vertical_deg,
-                        club=shot.club,
-                        ball_speed_mph=shot.ball_speed_mph,
-                        club_speed_mph=shot.club_speed_mph,
-                    )
                     accepted, vertical_selection_details = _select_vertical_radar_launch(
                         kld7_angle, shot
                     )
@@ -1649,8 +1543,6 @@ def on_shot_detected(shot: Shot):
                         ball_angle=_kld7_angle_log_payload(
                             kld7_angle,
                             "vertical_deg",
-                            raw_angle_deg=raw_vertical_angle_deg,
-                            calibration_details=vertical_calibration_details,
                             selection_details=vertical_selection_details,
                         ),
                         club_angle=_kld7_angle_log_payload(club_angle_v, "vertical_deg"),
@@ -1682,24 +1574,8 @@ def on_shot_detected(shot: Shot):
                     shot_timestamp=shot_ts,
                     ball_speed_mph=shot.ball_speed_mph,
                 )
-                raw_horizontal_angle_deg = (
-                    kld7_angle_h.horizontal_deg
-                    if kld7_angle_h and kld7_angle_h.horizontal_deg is not None
-                    else None
-                )
-                horizontal_calibration_details = None
                 horizontal_selection_details = None
                 if kld7_angle_h and kld7_angle_h.horizontal_deg is not None:
-                    (
-                        kld7_angle_h.horizontal_deg,
-                        horizontal_calibration_details,
-                    ) = _calibrate_experimental_kld7_trackman_angle(
-                        axis="h",
-                        angle_deg=kld7_angle_h.horizontal_deg,
-                        club=shot.club,
-                        ball_speed_mph=shot.ball_speed_mph,
-                        club_speed_mph=shot.club_speed_mph,
-                    )
                     horizontal_limit = (
                         float(
                             active_kld7_radc_tuning.get(
@@ -1708,7 +1584,7 @@ def on_shot_detected(shot: Shot):
                             )
                         )
                         if experimental_kld7_radc_tuning
-                        else (30.0 if experimental_kld7_trackman_calibration else 15.0)
+                        else 15.0
                     )
                     accepted_h, horizontal_selection_details = _select_horizontal_radar_launch(
                         kld7_angle_h, horizontal_limit
@@ -1764,8 +1640,6 @@ def on_shot_detected(shot: Shot):
                         ball_angle=_kld7_angle_log_payload(
                             kld7_angle_h,
                             "horizontal_deg",
-                            raw_angle_deg=raw_horizontal_angle_deg,
-                            calibration_details=horizontal_calibration_details,
                             selection_details=horizontal_selection_details,
                         ),
                         club_angle=_kld7_angle_log_payload(club_angle_h, "horizontal_deg"),
@@ -2006,7 +1880,8 @@ def start_monitor(
             **(trigger_kwargs or {}),
         )
         print(
-            f"[MODE] Rolling buffer mode (trigger: {trigger_type}, sample_rate: {sample_rate_ksps}ksps)"
+            "[MODE] Rolling buffer mode "
+            f"(trigger: {trigger_type}, sample_rate: {sample_rate_ksps}ksps)"
         )
 
     monitor.connect()
@@ -2349,13 +2224,20 @@ def main():
         "--sound-pre-trigger",
         type=int,
         default=16,
-        help="Pre-trigger segments S#n, 0-32 (default: 16 = 50/50 split, each segment ~4.27ms at 30ksps)",
+        help=(
+            "Pre-trigger segments S#n, 0-32 "
+            "(default: 16 = 50/50 split, each segment ~4.27ms at 30ksps)"
+        ),
     )
     parser.add_argument(
         "--sample-rate",
         type=int,
         default=30,
-        help="Radar sample rate in ksps (default: 30). Lower = longer buffer but lower max speed. 25=174mph/164ms, 27=187mph/152ms",
+        help=(
+            "Radar sample rate in ksps (default: 30). "
+            "Lower = longer buffer but lower max speed. "
+            "25=174mph/164ms, 27=187mph/152ms"
+        ),
     )
     parser.add_argument(
         "--kld7", action="store_true", help="Enable K-LD7 vertical angle radar (launch angle)"
@@ -2382,14 +2264,6 @@ def main():
         type=float,
         default=0.0,
         help="K-LD7 horizontal angle offset in degrees (default: 0.0)",
-    )
-    parser.add_argument(
-        "--experimental-kld7-trackman-calibration",
-        action="store_true",
-        help=(
-            "Enable the temporary TrackMan-trained K-LD7 angle correction "
-            "experiment (off by default)"
-        ),
     )
     parser.add_argument(
         "--experimental-kld7-raw-radc-logging",
@@ -2460,10 +2334,9 @@ def main():
     )
     args = parser.parse_args()
 
-    global experimental_kld7_trackman_calibration, experimental_kld7_radc_tuning
+    global experimental_kld7_radc_tuning
     global experimental_kld7_raw_radc_logging
     global active_kld7_radc_tuning
-    experimental_kld7_trackman_calibration = args.experimental_kld7_trackman_calibration
     experimental_kld7_raw_radc_logging = args.experimental_kld7_raw_radc_logging
     experimental_kld7_radc_tuning = args.experimental_kld7_radc_tuning
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
@@ -2538,8 +2411,6 @@ def main():
     else:
         print("Camera disabled by --no-camera flag")
 
-    if experimental_kld7_trackman_calibration:
-        print("Experimental K-LD7 TrackMan calibration enabled")
     if experimental_kld7_raw_radc_logging:
         print("Experimental K-LD7 raw RADC payload logging enabled")
     if experimental_kld7_radc_tuning:
