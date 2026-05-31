@@ -1344,6 +1344,7 @@ class TestOnShotDetected:
                 return None
 
         logged_buffers = []
+        logged_shots = []
 
         class StubSessionLogger:
             @property
@@ -1354,7 +1355,7 @@ class TestOnShotDetected:
                 logged_buffers.append(kwargs)
 
             def log_shot(self, **kwargs):
-                return None
+                logged_shots.append(kwargs)
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
@@ -1378,6 +1379,9 @@ class TestOnShotDetected:
         assert shot.launch_angle_vertical_source == "radar"
         assert shot.launch_angle_confidence == pytest.approx(0.67)
         assert shot.angle_source == "radar"
+        assert logged_shots[0]["launch_angle_vertical"] == pytest.approx(19.9)
+        assert logged_shots[0]["launch_angle_vertical_source"] == "radar"
+        assert logged_shots[0]["angle_source"] == "radar"
         assert logged_buffers[0]["ball_angle"]["selection_reason"] == "low_confidence_accept"
         assert logged_buffers[0]["ball_angle"]["acceptance_path"] == "low_confidence"
         assert logged_buffers[0]["ball_angle"]["radc_selection"] == {

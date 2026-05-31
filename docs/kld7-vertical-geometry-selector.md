@@ -45,10 +45,22 @@ For live range sessions, the kiosk shortcut is:
 scripts/start-kiosk.sh --kld7-geometry
 ```
 
-This enables the vertical K-LD7 and forwards the current field defaults:
-`--kld7-vertical-estimator geometry`, `--kld7-mount-tilt 10`,
+This behaves like the normal K-LD7 startup path, including horizontal K-LD7,
+but switches the vertical radar to geometry mode and forwards the current field
+defaults: `--kld7-vertical-estimator geometry`, `--kld7-mount-tilt 10`,
 `--kld7-ball-distance 5`, and `--kld7-angle-offset 2.5`. The individual
 `--kld7-*` flags can still be passed to override the preset.
+
+Plain `--kld7` intentionally stays on the legacy vertical estimator. Use it
+when you want the existing K-LD7 path without the geometry selector. The
+TrackMan collection preset enables geometry automatically:
+
+```bash
+scripts/start-kiosk.sh --trackman-test
+```
+
+That preset also enables horizontal K-LD7 and raw RADC payload logging so the
+session can be replayed offline.
 
 Important optional/configuration inputs:
 
@@ -119,6 +131,29 @@ There are two SNR concepts:
   to a strong anchor and passes the trajectory sanity checks.
 
 Weak frames are never allowed to start a geometry fit by themselves.
+
+## Production Selection Ladder
+
+When geometry mode is enabled, the vertical extractor should be read as a
+decision ladder:
+
+1. Primary two-frame geometry: use two or more selected frames in the normal
+   `20-100 ms` post-impact window when they match the OPS bin and pass the
+   rising-bearing rule.
+2. Early-assisted two-frame geometry: allow a `5-20 ms` frame only as adjacent
+   context around a strong in-window anchor, and only when it matches the OPS
+   bin for that same early timing range.
+3. Single-frame geometry: if no valid pair survives, solve from one strong
+   frame and mark the result as `geometry_single_frame`.
+4. Naive rule-stack fallback: if geometry cannot run but the rule-stack group is
+   still usable, return the weighted bearing average as `naive_rule_stack`.
+5. Legacy naive suspect: if only a broader legacy group remains, cap confidence
+   and mark the result as `legacy_naive_suspect`.
+
+`select_best_shot_result(...)` ranks those paths in that same spirit:
+`geometry_primary`, then `geometry_early_assisted`, then
+`geometry_single_frame`, then naive paths. This prevents a later clutter group
+from overriding an earlier geometry candidate from the actual ball flight.
 
 ## Anchor Selection
 
@@ -253,6 +288,39 @@ Naive:
 The estimator name is included in the result payload so callers can distinguish
 between true trajectory geometry, single-frame fallback, and legacy naive output.
 
+## Server Acceptance
+
+The extractor can return a candidate that the server still refuses to use as the
+user-facing launch angle. This is deliberate: the extractor answers "what did
+the radar see?" while the server answers "is this plausible enough to put on the
+shot?"
+
+Vertical radar acceptance has three confidence bands:
+
+- `strict_accept`: confidence is at least `0.80`.
+- `soft_accept`: confidence is at least `0.68` and the candidate passes the
+  soft guardrails.
+- `low_confidence_accept`: confidence is at least `0.65` and every other
+  guardrail passes. This lets the UI/session log preserve marginal but aligned
+  radar shots instead of silently replacing them with the estimator.
+
+Common rejection reasons:
+
+- `implausible_launch`: the launch plausibility model rejected the radar angle
+  for the club, ball speed, club speed, and spin context.
+- `low_confidence`: confidence was below the low-confidence floor.
+- `outside_soft_lane`: the angle was outside the broad club-family launch lane
+  used for soft/low-confidence candidates.
+- `estimator_delta_too_large`: the radar angle disagreed too much with the
+  independent launch estimator.
+- `no_candidate_frames`: the extractor returned no usable selected frames.
+- `suspicious_frame_span`: the candidate used many frames and still disagreed
+  with the estimator, which often points at clutter rather than ball flight.
+
+If a candidate is rejected, the session can still contain useful
+`radc_selection` diagnostics. Do not treat a rejected radar candidate as
+worthless until you inspect the selected frames, timing, bin errors, and SNR.
+
 ## Logging And Diagnostics
 
 The selector logs:
@@ -267,18 +335,86 @@ The selector logs:
 
 Useful result fields include:
 
-- `launch_angle_deg`
-- `raw_angle_deg`
-- `angle_offset_deg`
-- `estimator`
-- `geom_fit_rmse_deg`
-- `geom_single_frame_resid_deg`
-- `weak_adjacent_frame_used`
-- `ball_speed_mph`
-- `confidence`
-- `frame_count`
-- `avg_snr_db`
-- `impact_frames`
+| Field | Meaning |
+| --- | --- |
+| `estimator` | `geometry`, `geometry_single_frame`, or `naive`. |
+| `selection_path` | More specific path such as `geometry_primary`, `geometry_early_assisted`, `geometry_single_frame`, `naive_rule_stack`, or `legacy_naive_suspect`. |
+| `selected_frame_indices` | K-LD7 frame indices selected inside the shot window. |
+| `selected_t_ms` | Selected frame times relative to the impact timestamp used for K-LD7. |
+| `selected_bin_errors` | Absolute bin distance from the OPS-expected Doppler bin. |
+| `geom_fit_rmse_deg` | Two-frame geometry bearing-fit residual. High values usually mean timing, clutter, or bad pairing. |
+| `geom_single_frame_resid_deg` | One-frame geometry bearing residual. This can look excellent even when the shot is underconstrained. |
+| `weak_adjacent_frame_used` | True when a weak adjacent frame contributed to the selected fit. |
+| `raw_angle_deg` | Weighted bearing before final geometry interpretation. |
+| `angle_offset_deg` | Bearing offset applied to raw K-LD7 angle. |
+| `ball_speed_mph` | Speed implied by the selected K-LD7 Doppler bins. Compare with OPS/TrackMan. |
+| `confidence` | Extractor confidence before server acceptance guardrails. |
+| `frame_count` | Number of frames used by the selected result. |
+| `avg_snr_db` | Average SNR of the selected frames. |
+| `impact_frames` | Internal impact-energy group used for this result. |
+
+In console logs, look for lines like:
+
+```text
+[RADC-RULES] frame=39 t_ms=50.9 bin=1879 bin_err=1 snr=16.25 angle=-3.93 coh=0.99 -> PASS
+[KLD7] RADC: angle=15.8° ... est=geometry_single_frame path=geometry_single_frame selected_frames=[39] selected_t_ms=[50.9]
+```
+
+Those two lines usually tell you whether the radar had a credible target and
+whether the selector had enough frames to make a constrained geometry estimate.
+
+## Timing Debug Workflow
+
+The most important lesson from the TrackMan sessions is that a miss is not
+automatically bad radar data. Several misses had good OPS-bin matches and good
+SNR, but the useful K-LD7 frames landed slightly outside the selector's timing
+window or produced a different launch angle when replayed with a shifted impact
+instant.
+
+Use this workflow before changing thresholds:
+
+1. Confirm raw RADC exists. The session must have been collected with
+   `--trackman-test` or `--experimental-kld7-raw-radc-logging`.
+2. Confirm both K-LD7 streams were healthy. If stream health is far below
+   roughly `35 Hz`, or the log shows repeated short RADC payload reads, fix USB
+   and serial reliability before tuning selection logic.
+3. Read the live selected result:
+   `estimator`, `selection_path`, `selected_t_ms`, `selected_bin_errors`,
+   `avg_snr_db`, and `geom_fit_rmse_deg`.
+4. Scan nearby frames from about `-100 ms` to `+100 ms` around the K-LD7 impact
+   timestamp. Look for frames with low bin error, decent SNR, coherent phase,
+   and rising bearing.
+5. Replay trial impact shifts such as `-40`, `-30`, `-20`, `-10`, `+10`, `+20`,
+   `+30`, and `+40 ms`. Recompute frame times and geometry angle for the same
+   physical frames.
+6. Categorize the shot:
+   - production two-frame geometry selected correctly
+   - two-frame geometry recoverable by timing shift
+   - one-frame radar evidence only
+   - no usable radar signal, clutter, or off-boresight miss
+
+A timing shift that makes a two-frame pair match TrackMan is strong evidence
+that the radar saw the ball and the impact alignment is wrong. A timing shift
+that makes a single frame match TrackMan is weaker evidence: with one bearing
+observation, timing can move the solved launch angle enough to "fit" the target.
+Keep those shots in a separate one-frame diagnostic bucket.
+
+When investigating timing, compare against OPS transition diagnostics in
+`rolling_buffer_capture`:
+
+- `impact_source`
+- `impact_timestamp_ms`
+- `impact_offset_from_trigger_ms`
+- `impact_last_club_center_ms`
+- `impact_first_ball_center_ms`
+- `impact_speed_delta_mph`
+- `impact_transition_gap_ms`
+- `impact_reason`
+
+`impact_source="ops_transition"` means the K-LD7 path used the midpoint between
+the last club-like OPS frame and first ball-like OPS frame. If the speed jump is
+below the threshold or either side is missing, the code falls back to the sound
+trigger timing.
 
 ## Calibration Notes
 
@@ -304,14 +440,34 @@ boresight/electrical-zero correction. If it changes substantially by height,
 floor position, or distance, the setup may be affected by multipath or alignment
 error.
 
-## Current Limitations
+## Known Gaps And Focus Areas
 
-- Very early frames can contain club or multipath contamination even when bin and
-  SNR look plausible.
-- A one-frame result is underconstrained and must remain low confidence.
-- Incorrect impact timing can move the solved launch angle materially.
-- Incorrect radar distance, mount tilt, or height assumptions bias the geometry.
-- Ground multipath can bias the measured bearing before the selector sees it.
+- Per-shot timing alignment remains the largest open risk. The current OPS
+  transition estimate is better than blindly using the sound-trigger offset, but
+  TrackMan review still found shots where replayed timing shifts recovered the
+  geometry.
+- A one-frame result is underconstrained. It is useful evidence that the radar
+  saw something plausible, but it should not be counted the same way as
+  two-frame geometry when judging algorithm accuracy.
+- Second-frame selection needs more review. Some reviewed shots had an adjacent
+  frame just below the relaxed SNR threshold or a high-RMSE pair where the
+  strongest single frame looked better. Avoid loosening this globally until the
+  TrackMan bucket analysis supports it.
+- High-launch and off-boresight shots need more data. Shots launched around
+  `20 deg+`, pushed far right, or curving right can reduce vertical SNR and make
+  pair selection brittle.
+- The indoor screen/net distance matters. With a 12 ft ball-to-screen flight,
+  later frames can include screen, wall, or return clutter. Prefer early
+  in-flight evidence before the expected screen-time boundary.
+- USB reliability is part of angle accuracy. Two K-LD7 radars at 3 Mbaud plus
+  OPS243 must all stream cleanly. Repeated short RADC payloads or a horizontal
+  stream near `2 Hz` make the session unsuitable for selector tuning.
+- Incorrect radar distance, mount tilt, height offset, or boresight offset can
+  bias geometry even when timing is correct.
+- Ground, mat, net, and side-wall multipath can bias measured bearing before the
+  selector sees it.
+- Driver and low-launch/high-speed data are still thin compared with 7-iron
+  testing.
 
 ## Follow-Up TODOs
 
@@ -328,3 +484,7 @@ error.
   Candidate rule: if the paired result diverges sharply from the strongest
   single-frame candidate or requires a large bearing jump, fall back to the
   strongest/earliest single frame and mark it as `geometry_single_frame`.
+- Revisit second-frame SNR selection. A few reviewed shots had otherwise useful
+  adjacent frames near the relaxed threshold. Any change should be tested by
+  bucket: primary two-frame, timing-recoverable two-frame, one-frame diagnostic,
+  and no-signal/clutter.

@@ -35,7 +35,7 @@ def test_trackman_test_dry_run_enables_raw_capture_without_calibration():
 
 
 def test_kld7_geometry_preset_enables_field_geometry_defaults():
-    """The geometry preset should opt into the validated launch-angle defaults."""
+    """The geometry preset should opt into validated launch-angle defaults."""
     result = _dry_run("--kld7-geometry")
     command = result.stdout.strip()
 
@@ -44,6 +44,9 @@ def test_kld7_geometry_preset_enables_field_geometry_defaults():
     assert "--kld7-vertical-estimator geometry" in command
     assert "--kld7-mount-tilt 10" in command
     assert "--kld7-ball-distance 5" in command
+    assert "--kld7-horizontal" in command
+    assert "--kld7-horizontal-port /dev/kld7_horizontal" in command
+    assert "--kld7-horizontal-offset 0" in command
 
 
 def test_plain_kld7_keeps_legacy_angle_path():
