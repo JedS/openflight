@@ -53,19 +53,25 @@ platform-xhci-hcd.1-usb-0:2:1.0       -> ../../ttyACM0    # OPS243
 ### Starting with dual radars
 
 ```bash
-# Minimal — uses defaults (ports from udev symlinks, offsets from calibration)
-./scripts/start-kiosk.sh --kld7
+# Launch-angle geometry field preset
+./scripts/start-kiosk.sh --kld7-geometry
 
 # Explicit
-./scripts/start-kiosk.sh --kld7 --kld7-port /dev/kld7_vertical --kld7-angle-offset 8 \
+./scripts/start-kiosk.sh --kld7 --kld7-port /dev/kld7_vertical \
+  --kld7-vertical-estimator geometry --kld7-mount-tilt 10 \
+  --kld7-ball-distance 5 --kld7-angle-offset 2.5 \
   --kld7-horizontal --kld7-horizontal-port /dev/kld7_horizontal --kld7-horizontal-offset 0
 ```
 
-When `--kld7` is passed, the kiosk script automatically:
-- Uses `/dev/kld7_vertical` as the vertical port (default)
-- Uses offset 8° for vertical (default)
-- Enables horizontal if `/dev/kld7_horizontal` symlink exists
-- Uses offset 0° for horizontal (default)
+When `--kld7-geometry` is passed, the kiosk script automatically:
+
+- Enables the vertical K-LD7 on `/dev/kld7_vertical`.
+- Uses the geometry estimator with the current field defaults:
+  `mount=10°`, `ball distance=5ft`, and vertical offset `+2.5°`.
+- Enables horizontal automatically if `/dev/kld7_horizontal` exists.
+- Uses offset `0°` for horizontal unless overridden.
+
+All explicit `--kld7-*` flags still override these defaults.
 
 ### Horizontal radar mounting
 
@@ -177,15 +183,26 @@ If `--kld7` or `--kld7-horizontal` is passed but the radar fails to connect afte
 
 ### Launch angle calibration (vertical)
 
-The raw RADC angle needs an offset to match real launch angles. The offset depends on your mounting geometry.
-
-1. Start with `--kld7-angle-offset 8`
-2. Hit 5-10 shots with a 7-iron
-3. Compare reported angles to expected (7i: 16-18°)
-4. Adjust: if angles read 5° too low, increase offset by 5
+The geometry estimator needs the physical mount, ball distance, and boresight
+offset to match real launch angles. The field preset is:
 
 ```bash
-scripts/start-kiosk.sh --kld7 --kld7-angle-offset 8
+scripts/start-kiosk.sh --kld7-geometry
+```
+
+That expands to the current 7-iron/TrackMan-tested defaults:
+`--kld7-vertical-estimator geometry --kld7-mount-tilt 10 --kld7-ball-distance 5 --kld7-angle-offset 2.5`.
+
+To recalibrate:
+
+1. Start with `--kld7-geometry`.
+2. Hit 5-10 shots with a 7-iron
+3. Compare reported angles to expected (7i: 16-18°)
+4. Adjust mount/distance only if the physical setup changes; adjust
+   `--kld7-angle-offset` for a stable boresight bias.
+
+```bash
+scripts/start-kiosk.sh --kld7-geometry --kld7-angle-offset 3.5
 ```
 
 ### Aim direction calibration (horizontal)

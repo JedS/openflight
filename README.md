@@ -60,8 +60,8 @@ Follow the **[Raspberry Pi Setup Guide](docs/raspberry-pi-setup.md)** for OS ins
 # Default: rolling buffer mode with sound trigger
 scripts/start-kiosk.sh
 
-# With K-LD7 angle radar
-scripts/start-kiosk.sh --kld7 --kld7-angle-offset 13
+# With K-LD7 launch-angle geometry defaults
+scripts/start-kiosk.sh --kld7-geometry
 
 # Development mode (no hardware)
 scripts/start-kiosk.sh --mock

@@ -27,6 +27,7 @@ KLD7_ANGLE_OFFSET=""
 KLD7_HORIZONTAL=false
 KLD7_HORIZONTAL_PORT=""
 KLD7_HORIZONTAL_OFFSET=""
+KLD7_GEOMETRY=false
 KLD7_VERTICAL_ESTIMATOR=""
 KLD7_MOUNT_TILT=""
 KLD7_BALL_DISTANCE=""
@@ -111,6 +112,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --kld7)
             KLD7=true
+            shift
+            ;;
+        --kld7-geometry)
+            KLD7_GEOMETRY=true
             shift
             ;;
         --kld7-port)
@@ -210,9 +215,18 @@ fi
 
 if [ "$TRACKMAN_TEST" = true ]; then
     KLD7=true
+    KLD7_GEOMETRY=true
     KLD7_HORIZONTAL=true
     EXPERIMENTAL_KLD7_RAW_RADC_LOGGING=true
     SESSION_LOCATION="${SESSION_LOCATION:-trackman}"
+fi
+
+if [ "$KLD7_GEOMETRY" = true ]; then
+    KLD7=true
+    KLD7_VERTICAL_ESTIMATOR="${KLD7_VERTICAL_ESTIMATOR:-geometry}"
+    KLD7_MOUNT_TILT="${KLD7_MOUNT_TILT:-10}"
+    KLD7_BALL_DISTANCE="${KLD7_BALL_DISTANCE:-5}"
+    KLD7_ANGLE_OFFSET="${KLD7_ANGLE_OFFSET:-2.5}"
 fi
 
 # Colors for output
@@ -341,8 +355,9 @@ if [ "$KLD7" = true ]; then
     SERVER_CMD="$SERVER_CMD --kld7"
     SERVER_CMD="$SERVER_CMD --kld7-port ${KLD7_PORT:-/dev/kld7_vertical}"
     SERVER_CMD="$SERVER_CMD --kld7-angle-offset ${KLD7_ANGLE_OFFSET:-8}"
-    # Geometry estimator config (only forwarded when set; otherwise server
-    # defaults apply: estimator=geometry, mount=18°, distance=5.5ft).
+    # Geometry estimator config is forwarded only when set explicitly or via
+    # --kld7-geometry/--trackman-test. Plain --kld7 keeps the historical kiosk
+    # defaults unless the caller opts into the geometry field preset.
     [ -n "$KLD7_VERTICAL_ESTIMATOR" ] && SERVER_CMD="$SERVER_CMD --kld7-vertical-estimator $KLD7_VERTICAL_ESTIMATOR"
     [ -n "$KLD7_MOUNT_TILT" ] && SERVER_CMD="$SERVER_CMD --kld7-mount-tilt $KLD7_MOUNT_TILT"
     [ -n "$KLD7_BALL_DISTANCE" ] && SERVER_CMD="$SERVER_CMD --kld7-ball-distance $KLD7_BALL_DISTANCE"

@@ -39,6 +39,17 @@ Required for geometry mode:
 - `orientation="vertical"`.
 - `vertical_estimator="geometry"`.
 
+For live range sessions, the kiosk shortcut is:
+
+```bash
+scripts/start-kiosk.sh --kld7-geometry
+```
+
+This enables the vertical K-LD7 and forwards the current field defaults:
+`--kld7-vertical-estimator geometry`, `--kld7-mount-tilt 10`,
+`--kld7-ball-distance 5`, and `--kld7-angle-offset 2.5`. The individual
+`--kld7-*` flags can still be passed to override the preset.
+
 Important optional/configuration inputs:
 
 - `angle_offset_deg`: bearing/boresight correction applied to raw K-LD7 angle

@@ -109,17 +109,20 @@ Replace `FTXXXXXX` and `FTYYYYYY` with the actual serial numbers. Now the radars
 
 Both should be positioned near the OPS243-A, 3-5 feet behind the tee.
 
-### Angle Offset Calibration
+### Geometry Calibration
 
-The raw RADC angle needs an offset to match real launch angles. The offset depends on your mounting geometry (sensor height, angle, distance from ball).
+The vertical K-LD7 geometry estimator needs the physical mount tilt,
+ball-to-radar distance, and boresight offset to match real launch angles.
 
-1. Start a session with `--kld7 --kld7-angle-offset 8`
+1. Start a session with `--kld7-geometry`
 2. Hit 5-10 shots with a known club (7-iron recommended)
 3. Compare reported launch angles to expected values:
    - Wedge: 24-30°, 7-iron: 16-18°, 5-iron: 12-14°, Driver: 10-14°
-4. Adjust the offset: if angles read 5° too low, increase offset by 5
+4. Keep `--kld7-mount-tilt` and `--kld7-ball-distance` matched to the physical
+   setup; adjust `--kld7-angle-offset` for a stable boresight bias.
 
-Typical offsets are 5-10°. The exact value depends on your mounting position.
+The current field preset is mount tilt `10°`, ball distance `5ft`, and angle
+offset `+2.5°`. The exact values depend on your mounting position.
 
 See [K-LD7 Troubleshooting](kld7-troubleshooting.md) for more details.
 
@@ -131,8 +134,8 @@ See [K-LD7 Troubleshooting](kld7-troubleshooting.md) for more details.
 # Default: rolling buffer + sound trigger
 ./scripts/start-kiosk.sh
 
-# With K-LD7 angle radar
-./scripts/start-kiosk.sh --kld7 --kld7-angle-offset 8
+# With K-LD7 launch-angle geometry defaults
+./scripts/start-kiosk.sh --kld7-geometry
 
 # Mock mode (no hardware needed)
 ./scripts/start-kiosk.sh --mock
@@ -249,7 +252,7 @@ Use `DISPLAY=:0` prefix for commands that need the Pi's display.
 ```bash
 ./scripts/start-kiosk.sh                                      # Default
 ./scripts/start-kiosk.sh --mock                                # No hardware
-./scripts/start-kiosk.sh --kld7 --kld7-angle-offset 8          # With angle radar
+./scripts/start-kiosk.sh --kld7-geometry                       # With angle radar
 ./scripts/start-kiosk.sh --port 3000                           # Custom port
 ```
 

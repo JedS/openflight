@@ -22,11 +22,13 @@ For every test pass, preserve enough raw data and diagnostics to answer:
    scripts/start-kiosk.sh --trackman-test
    ```
 
-   This enables both K-LD7 radars, raw RADC payload logging, and
-   `--session-location trackman`. It intentionally does not enable saved-angle
-   Trackman calibration or experimental RADC tuning, so the field session keeps
-   production angle extraction behavior while preserving raw payloads for
-   replay.
+   This enables both K-LD7 radars, raw RADC payload logging,
+   `--session-location trackman`, and the K-LD7 geometry field defaults:
+   `--kld7-vertical-estimator geometry`, `--kld7-mount-tilt 10`,
+   `--kld7-ball-distance 5`, and `--kld7-angle-offset 2.5`. It intentionally
+   does not enable saved-angle Trackman calibration or experimental RADC tuning,
+   so the field session keeps production angle extraction behavior while
+   preserving raw payloads for replay.
    To verify the exact server command without starting hardware or the kiosk,
    run:
 
