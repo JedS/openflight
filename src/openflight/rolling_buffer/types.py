@@ -29,6 +29,7 @@ class IQCapture:
         trigger_timestamp: Host epoch timestamp when the hardware trigger fired,
             derived from first_byte_timestamp and the post-trigger buffer span.
     """
+
     sample_time: float
     trigger_time: float
     i_samples: List[int]
@@ -36,6 +37,8 @@ class IQCapture:
     timestamp: float = field(default_factory=lambda: datetime.now().timestamp())
     first_byte_timestamp: Optional[float] = None
     trigger_timestamp: Optional[float] = None
+    trigger_timestamp_source: Optional[str] = None
+    clock_sync_offset_s: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Infer the hardware trigger epoch when first-byte timing is available."""
@@ -76,6 +79,19 @@ class IQCapture:
         inferred = self.infer_trigger_timestamp_from_first_byte()
         if inferred is not None:
             self.trigger_timestamp = inferred
+            self.trigger_timestamp_source = "first_byte"
+        return inferred
+
+    def infer_trigger_timestamp_from_clock_sync(self, clock_offset_s: float) -> float:
+        """Return hardware trigger epoch from OPS radar clock and host offset."""
+        return self.trigger_time + clock_offset_s
+
+    def apply_trigger_timestamp_from_clock_sync(self, clock_offset_s: float) -> float:
+        """Set trigger_timestamp using OPS trigger_time plus host-clock offset."""
+        inferred = self.infer_trigger_timestamp_from_clock_sync(clock_offset_s)
+        self.trigger_timestamp = inferred
+        self.trigger_timestamp_source = "ops_clock_sync"
+        self.clock_sync_offset_s = clock_offset_s
         return inferred
 
 
@@ -86,6 +102,7 @@ class SpeedReading:
 
     This matches the format used in streaming mode for compatibility.
     """
+
     speed_mph: float
     magnitude: float
     timestamp_ms: float  # Relative to capture start
@@ -109,6 +126,7 @@ class SpeedTimeline:
         sample_rate_hz: Effective sample rate (~937 Hz with 32-step overlap)
         capture: Reference to the original I/Q capture
     """
+
     readings: List[SpeedReading]
     sample_rate_hz: float
     capture: Optional[IQCapture] = None
@@ -155,6 +173,7 @@ class ImpactEstimate:
     clear club-to-ball transition, the midpoint between the last club-like frame
     and first ball-like frame is a better impact instant for K-LD7 correlation.
     """
+
     timestamp_ms: Optional[float]
     source: str
     reason: Optional[str] = None
@@ -195,7 +214,8 @@ class SpinCandidate:
             "at_upper_rail": bool(self.at_upper_rail),
             "expected_spin_error_pct": (
                 round(self.expected_spin_error_pct, 1)
-                if self.expected_spin_error_pct is not None else None
+                if self.expected_spin_error_pct is not None
+                else None
             ),
             "selected": bool(self.selected),
         }
@@ -236,6 +256,7 @@ class SpinResult:
         rejection_reason: Human-readable reason if the detection was
             rejected (rail-hit, low SNR, etc.). None on a clean accept.
     """
+
     spin_rpm: float
     confidence: float
     snr: float
@@ -260,7 +281,8 @@ class SpinResult:
 
     @classmethod
     def no_spin_detected(
-        cls, reason: str = "No clear spin signal",
+        cls,
+        reason: str = "No clear spin signal",
         snr: float = 0.0,
         modulation_depth: Optional[float] = None,
         peak_freq_hz: Optional[float] = None,
@@ -278,7 +300,10 @@ class SpinResult:
         carried through so we can see *why* it failed in the JSONL.
         """
         return cls(
-            spin_rpm=0, confidence=0, snr=round(snr, 2), quality=reason,
+            spin_rpm=0,
+            confidence=0,
+            snr=round(snr, 2),
+            quality=reason,
             modulation_depth=modulation_depth,
             peak_freq_hz=peak_freq_hz,
             seam_cycles=seam_cycles,
@@ -312,6 +337,7 @@ class ProcessedCapture:
         capture: Original raw I/Q data
         impact: Best capture-relative impact estimate for K-LD7 correlation
     """
+
     timeline: SpeedTimeline
     ball_speed_mph: float
     ball_timestamp_ms: float

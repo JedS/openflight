@@ -228,6 +228,8 @@ class TestLogShot:
             q_samples=[2048] * 4,
             first_byte_timestamp=1234567890.25,
             trigger_timestamp=1234567890.182,
+            trigger_timestamp_source="ops_clock_sync",
+            clock_sync_offset_s=1234567790.114,
             post_trigger_duration_ms=68.0,
         )
 
@@ -237,6 +239,10 @@ class TestLogShot:
         assert entry["type"] == "rolling_buffer_capture"
         assert entry["first_byte_timestamp"] == 1234567890.25
         assert entry["trigger_timestamp"] == 1234567890.182
+        assert entry["trigger_timestamp_source"] == "ops_clock_sync"
+        assert entry["trigger_timestamp_from_first_byte"] == 1234567890.182
+        assert entry["trigger_timestamp_delta_from_first_byte_ms"] == 0.0
+        assert entry["clock_sync_offset_s"] == 1234567790.114
         assert entry["post_trigger_duration_ms"] == 68.0
 
 
@@ -416,8 +422,12 @@ class TestLogClockSync:
             "best_read_latency_ms": 2.1,
             "offset_spread_ms": 0.8,
             "reads": [
-                {"radar_clock_s": 137.4, "offset_s": 1780000000.5,
-                 "read_latency_ms": 2.1, "raw": '{"Clock":"137.4"}'},
+                {
+                    "radar_clock_s": 137.4,
+                    "offset_s": 1780000000.5,
+                    "read_latency_ms": 2.1,
+                    "raw": '{"Clock":"137.4"}',
+                },
             ],
         }
 

@@ -1937,11 +1937,10 @@ def start_monitor(
                 baud=getattr(monitor.radar, "baud", 0) if hasattr(monitor, "radar") else 0,
                 firmware=radar_info.get("Version"),
             )
-            # H1 timing instrumentation: capture the OPS radar-clock -> host-epoch
-            # offset once at startup (before the trigger loop runs). This does not
-            # change the impact timestamp used downstream — it just lets offline
-            # analysis convert the radar's internal trigger_time to a host epoch
-            # and test whether anchoring to it removes the KLD7/OPS timing jitter.
+            # Capture the OPS radar-clock -> host-epoch offset once at startup
+            # before the trigger loop runs. Sound-triggered captures use this to
+            # anchor K-LD7 correlation to the OPS trigger_time instead of the
+            # USB first-byte arrival time.
             radar = getattr(monitor, "radar", None)
             if radar is not None and hasattr(radar, "read_clock_sync"):
                 try:

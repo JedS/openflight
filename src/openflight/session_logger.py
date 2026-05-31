@@ -183,10 +183,10 @@ class SessionLogger:
     def log_clock_sync(self, device: str, port: str, summary: Dict[str, Any]):
         """Log an OPS clock-sync block (radar-clock -> host-epoch mapping).
 
-        Instrumentation for KLD7/OPS timing alignment (H1). The ``summary``
-        comes from OPS243Radar.read_clock_sync and carries the per-read offsets
-        plus the best offset/latency, so the radar's internal trigger_time can
-        be converted to a host epoch in offline analysis.
+        The ``summary`` comes from OPS243Radar.read_clock_sync and carries the
+        per-read offsets plus the best offset/latency, so the radar's internal
+        trigger_time can be converted to a host epoch in live capture and
+        offline analysis.
         """
         if not self.enabled:
             return
@@ -743,6 +743,8 @@ class SessionLogger:
         spin_rejection_reason: Optional[str] = None,
         first_byte_timestamp: Optional[float] = None,
         trigger_timestamp: Optional[float] = None,
+        trigger_timestamp_source: Optional[str] = None,
+        clock_sync_offset_s: Optional[float] = None,
         post_trigger_duration_ms: Optional[float] = None,
     ):
         """
@@ -795,6 +797,8 @@ class SessionLogger:
             first_byte_timestamp: Host epoch timestamp when the first byte
                 of the hardware-triggered rolling-buffer dump arrived
             trigger_timestamp: Host epoch timestamp of the inferred hardware trigger
+            trigger_timestamp_source: Method used to infer trigger_timestamp
+            clock_sync_offset_s: Host epoch minus OPS radar clock, when available
             post_trigger_duration_ms: Duration of the capture after trigger
         """
         if not self.enabled:
@@ -802,8 +806,7 @@ class SessionLogger:
 
         trigger_offset_ms = (trigger_time - sample_time) * 1000
         impact_offset_from_trigger_ms = (
-            impact_timestamp_ms - trigger_offset_ms
-            if impact_timestamp_ms is not None else None
+            impact_timestamp_ms - trigger_offset_ms if impact_timestamp_ms is not None else None
         )
 
         self._write_entry(
@@ -836,6 +839,21 @@ class SessionLogger:
                 "trigger_latency_ms": trigger_latency_ms,
                 "first_byte_timestamp": first_byte_timestamp,
                 "trigger_timestamp": trigger_timestamp,
+                "trigger_timestamp_source": trigger_timestamp_source,
+                "trigger_timestamp_from_first_byte": (
+                    first_byte_timestamp - (post_trigger_duration_ms / 1000.0)
+                    if first_byte_timestamp is not None and post_trigger_duration_ms is not None
+                    else None
+                ),
+                "trigger_timestamp_delta_from_first_byte_ms": (
+                    (trigger_timestamp - (first_byte_timestamp - post_trigger_duration_ms / 1000.0))
+                    * 1000.0
+                    if trigger_timestamp is not None
+                    and first_byte_timestamp is not None
+                    and post_trigger_duration_ms is not None
+                    else None
+                ),
+                "clock_sync_offset_s": clock_sync_offset_s,
                 "post_trigger_duration_ms": post_trigger_duration_ms,
                 "smash_factor": smash_factor,
                 "spin_rpm": spin_rpm,
