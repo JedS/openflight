@@ -156,6 +156,7 @@ cd ..
 # Make scripts executable
 log "Making scripts executable..."
 chmod +x scripts/*.sh
+chmod +x scripts/setup/*.sh
 
 # Run tests to verify installation
 log "Running tests to verify installation..."

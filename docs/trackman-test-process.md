@@ -43,11 +43,20 @@ For every test pass, preserve enough raw data and diagnostics to answer:
 4. Confirm K-LD7 orientation and udev symlinks:
    - horizontal: `/dev/kld7_horizontal`
    - vertical: `/dev/kld7_vertical`
-5. For the primary K-LD7 replay path, rely on the `--trackman-test` JSONL raw
+5. Confirm both K-LD7 FTDI adapters are in low-latency mode. Run this once on
+   the Pi if the udev rule has not been installed:
+
+   ```bash
+   sudo scripts/setup/setup_kld7_latency.sh
+   ```
+
+   Then verify startup logs show `USB serial latency_timer=1ms` for both
+   vertical and horizontal K-LD7 devices.
+6. For the primary K-LD7 replay path, rely on the `--trackman-test` JSONL raw
    RADC logging. Run the standalone RADC capture script only for extra
    short-window diagnostics, and make sure its capture window overlaps the
    Trackman comparison rows.
-6. Make sure Trackman export includes shot number/order, club, ball speed, club
+7. Make sure Trackman export includes shot number/order, club, ball speed, club
    speed, launch angle, launch direction, spin rate, and carry.
 
 ## Files To Collect

@@ -102,6 +102,28 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 Replace `FTXXXXXX` and `FTYYYYYY` with the actual serial numbers. Now the radars are always at `/dev/kld7_vertical` and `/dev/kld7_horizontal` regardless of plug order.
 
+### FTDI Low-Latency Mode
+
+The K-LD7 RADC stream runs at 3 Mbaud, so the FTDI USB adapters should use a
+`latency_timer` of `1ms` instead of the Linux default `16ms`. Install the
+OpenFlight udev rule once after the stable `/dev/kld7_*` symlinks are working:
+
+```bash
+sudo scripts/setup/setup_kld7_latency.sh
+```
+
+The script writes `/etc/udev/rules.d/99-openflight-kld7-latency.rules`, applies
+the value to currently connected K-LD7 adapters, and reloads udev so it persists
+after reboot or replug. Use `--dry-run` to preview the exact rule, or
+`--all-ftdi` if the K-LD7 adapters do not have stable symlinks yet.
+
+On startup, confirm the server logs show both radars at `1ms`:
+
+```text
+[KLD7:vertical] USB serial latency_timer=1ms ...
+[KLD7:horizontal] USB serial latency_timer=1ms ...
+```
+
 ### Mounting
 
 - **Vertical unit** — measures launch angle. Mount with the antenna plane vertical, aimed at the hitting area.
